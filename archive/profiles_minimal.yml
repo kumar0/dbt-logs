@@ -1,0 +1,7 @@
+etl_pipeline:
+  target: dev
+  outputs:
+    dev:
+      type: glue
+      region: us-east-1
+      # Minimal config to prevent hanging

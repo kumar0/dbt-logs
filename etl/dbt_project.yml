@@ -1,0 +1,37 @@
+name: 'etl_pipeline'
+version: '1.0.0'
+config-version: 2
+
+profile: 'etl_pipeline'
+
+model-paths: ['models']
+analysis-paths: ['analyses']
+test-paths: ['tests']
+seed-paths: ['seeds']
+macro-paths: ['macros']
+snapshot-paths: ['snapshots']
+
+clean-targets:
+  - 'target'
+  - 'dbt_packages'
+
+on-run-start:
+  - '{{ log_project_start() }}'
+
+models:
+  etl_pipeline:
+    +post-hook:
+      - '{{ log_row_count() }}'
+    staging:
+      +materialized: table
+      +file_format: iceberg
+      +schema: staging
+    marts:
+      dimensions:
+        +materialized: incremental
+        +schema: dest
+        +on_schema_change: append_new_columns
+      facts:
+        +materialized: incremental
+        +schema: dest
+        +on_schema_change: append_new_columns

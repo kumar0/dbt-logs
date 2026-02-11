@@ -1,0 +1,86 @@
+version: 2
+
+models:
+  - name: dim_customers
+    description: Customer dimension with SCD Type 2 history tracking
+    columns:
+      - name: customer_sk
+        description: Surrogate key for customer dimension
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        description: Natural key from source system
+        tests:
+          - not_null
+      - name: is_current
+        description: Flag indicating current record (Y/N)
+        tests:
+          - accepted_values:
+              values: ['Y', 'N']
+      - name: effective_date
+        description: Date when this record became active
+      - name: end_date
+        description: Date when this record was superseded (NULL for current)
+
+  - name: dim_products
+    description: Product dimension with SCD Type 2 history tracking
+    columns:
+      - name: product_sk
+        description: Surrogate key for product dimension
+        tests:
+          - unique
+          - not_null
+      - name: product_id
+        description: Natural key from source system
+        tests:
+          - not_null
+      - name: is_current
+        description: Flag indicating current record (Y/N)
+        tests:
+          - accepted_values:
+              values: ['Y', 'N']
+      - name: effective_date
+        description: Date when this record became active
+      - name: end_date
+        description: Date when this record was superseded (NULL for current)
+
+  - name: fact_orders
+    description: Order facts with aggregated metrics
+    columns:
+      - name: order_sk
+        description: Surrogate key for order fact
+        tests:
+          - unique
+          - not_null
+      - name: order_id
+        description: Natural key from source system
+        tests:
+          - not_null
+      - name: customer_sk
+        description: Foreign key to dim_customers
+        tests:
+          - relationships:
+              to: ref('dim_customers')
+              field: customer_sk
+
+  - name: fact_order_items
+    description: Order item facts at granular level
+    columns:
+      - name: order_item_sk
+        description: Surrogate key for order item fact
+        tests:
+          - unique
+          - not_null
+      - name: order_sk
+        description: Foreign key to fact_orders
+        tests:
+          - relationships:
+              to: ref('fact_orders')
+              field: order_sk
+      - name: product_sk
+        description: Foreign key to dim_products
+        tests:
+          - relationships:
+              to: ref('dim_products')
+              field: product_sk

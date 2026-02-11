@@ -1,0 +1,13 @@
+etl_pipeline:
+  target: dev
+  outputs:
+    dev:
+      type: athena
+      s3_staging_dir: s3://etl-athena-results-777334699019-us-east-1/
+      s3_data_dir: s3://etl-datalake-777334699019-us-east-1/
+      region_name: us-east-1
+      database: etl_dest_db
+      schema: etl_dest_db
+      work_group: etl-workgroup
+      num_retries: 3
+      poll_interval: 1

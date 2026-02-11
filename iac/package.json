@@ -1,0 +1,23 @@
+{
+  "name": "etl-platform-cdk",
+  "version": "1.0.0",
+  "description": "CDK stack for ETL platform with SCD Type 2",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "cdk",
+    "synth": "cdk synth --profile mondayskills.development",
+    "deploy": "cdk deploy --profile mondayskills.development",
+    "destroy": "cdk destroy --profile mondayskills.development"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "aws-cdk": "^2.237.1",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.237.1",
+    "constructs": "^10.0.0",
+    "source-map-support": "^0.5.21"
+  }
+}

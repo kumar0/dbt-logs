@@ -1,0 +1,40 @@
+etl_pipeline:
+  target: dev
+  outputs:
+    dev:
+      type: glue
+      role_arn: arn:aws:iam::777334699019:role/etl-glue-job-role-us-east-1
+      region: us-east-1
+      workers: "{{ env_var('NUM_WORKERS', '3') | int }}"
+      worker_type: "{{ env_var('WORKER_TYPE', 'G.1X') }}"
+      threads: 2
+      database: etl_dest_db
+      schema: etl_dest_db
+      session_provisioning_timeout_in_seconds: 300
+      location: s3://etl-datalake-777334699019-us-east-1/dbt/
+      glue_version: '5.0'
+      idle_timeout: 2
+      query_timeout_in_minutes: 60
+      datalake_formats: iceberg
+      glue_session_reuse: true
+      glue_session_id: hk_dbt
+      default_arguments: '--enable-auto-scaling=true,
+        --enable-metrics=true,
+        --enable-continuous-cloudwatch-log=true,
+        --enable-continuous-log-filter=true'
+      conf: >-
+        --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+        --conf spark.sql.catalog.glue_catalog=org.apache.iceberg.spark.SparkCatalog
+        --conf spark.sql.catalog.glue_catalog.warehouse=s3://etl-datalake-777334699019-us-east-1/dbt/
+        --conf spark.sql.catalog.glue_catalog.catalog-impl=org.apache.iceberg.aws.glue.GlueCatalog
+        --conf spark.sql.catalog.glue_catalog.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+        --conf spark.sql.catalog.spark_catalog=org.apache.iceberg.spark.SparkSessionCatalog
+        --conf spark.sql.catalog.spark_catalog.warehouse=s3://etl-datalake-777334699019-us-east-1/
+        --conf spark.sql.catalog.spark_catalog.catalog-impl=org.apache.iceberg.aws.glue.GlueCatalog
+        --conf spark.sql.catalog.spark_catalog.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+        --conf spark.sql.iceberg.handle-timestamp-without-timezone=true
+        --conf spark.metrics.conf.*.sink.console.class=org.apache.spark.metrics.sink.ConsoleSink
+        --conf spark.metrics.conf.*.sink.console.period=30
+        --conf spark.metrics.conf.*.sink.console.unit=seconds
+        --conf spark.ui.prometheus.enabled=true
+      aws_profile_name: mondayskills.development

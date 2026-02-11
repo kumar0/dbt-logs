@@ -1,0 +1,16 @@
+target/
+dbt_packages/
+logs/
+logs-bk/
+.dbt/
+.env*
+.user.yml
+*.py
+*.sh
+!docker-entrypoint.sh
+*.md
+__pycache__/
+.gitignore
+profiles_athena.yml
+profiles_minimal.yml
+package-lock.yml

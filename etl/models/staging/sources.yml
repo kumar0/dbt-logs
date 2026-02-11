@@ -1,0 +1,17 @@
+version: 2
+
+sources:
+  - name: etl_source
+    database: etl_source_db
+    schema: etl_source_db
+    tables:
+      - name: customers
+        description: Customer master data from operational systems
+      - name: products
+        description: Product catalog from operational systems
+      - name: orders
+        description: Order transactions from operational systems
+      - name: order_items
+        description: Order line items from operational systems
+      - name: payments
+        description: Payment transactions from operational systems

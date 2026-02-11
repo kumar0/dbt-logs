@@ -1,0 +1,9 @@
+target/
+.dbt/
+dbt_packages/
+logs/
+.user.yml
+.gitignore
+package-lock.yml
+profiles.yml
+*.log

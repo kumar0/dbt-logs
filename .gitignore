@@ -1,0 +1,34 @@
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log
+archive/logs/
+archive/logs-bk/
+
+# Large data files
+viz/sample_glue_metrics.csv
+viz/data/
+
+# dbt packages (installed via dbt deps)
+etl/dbt_packages/
+
+# dbt artifacts
+etl/target/
+etl/logs/
+
+# Node
+node_modules/
+iac/cdk.out/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment
+.env
