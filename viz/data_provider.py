@@ -13,7 +13,9 @@ Fetch modes
 """
 
 import os
+import sys
 import logging
+import argparse
 
 import pandas as pd
 from typing import Optional, Literal
@@ -22,10 +24,22 @@ FetchMode = Literal["full", "delta"]
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_profile_from_cli() -> Optional[str]:
+    """Parse --profile from command-line args (after Streamlit's '--' separator)."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--profile", type=str, default=None)
+    args, _ = parser.parse_known_args()
+    return args.profile
+
+
 # ---------------------------------------------------------------------------
-# Config — override via env vars or pass explicitly
+# Config — override via: CLI --profile > env AWS_PROFILE > default
 # ---------------------------------------------------------------------------
-AWS_PROFILE = os.environ.get("AWS_PROFILE", "mondayskills.development")
+_cli_profile = _parse_profile_from_cli()
+AWS_PROFILE = _cli_profile or os.environ.get("AWS_PROFILE", "dev2")
+logger.info("[Config] AWS_PROFILE resolved to '%s' (cli=%s, env=%s)",
+            AWS_PROFILE, _cli_profile, os.environ.get("AWS_PROFILE"))
 DBT_LOG_GROUP = os.environ.get("DBT_LOG_GROUP", "EtlComputeStack-DbtTaskDefinitionDbtContainerLogGroupE420E81B-W7fZGqD3w8jD")
 
 # --- Glue metrics config ---
@@ -248,6 +262,10 @@ def fetch_glue_job_metrics(
                  sample_count, label, unit, category, description,
                  run_id_type
     """
+    logger.debug("[GlueMetrics] fetch_glue_job_metrics called — mode=%s, prefix=%s, start=%s, end=%s",
+                 fetch_mode, GLUE_SESSION_ID_PREFIX, start_time, end_time)
+    logger.debug("[GlueMetrics] Using AWS_PROFILE=%s", AWS_PROFILE)
+
     df = _fetch_glue_from_cloudwatch(
         namespace=namespace,
         job_name=job_name,
@@ -260,6 +278,7 @@ def fetch_glue_job_metrics(
         fetch_mode=fetch_mode,
         since=since,
     )
+    logger.debug("[GlueMetrics] _fetch_glue_from_cloudwatch returned %d rows", len(df))
     if not df.empty:
         last_glue_fetch_info["source"] = "cloudwatch"
         last_glue_fetch_info["detail"] = f"{len(df)} records, {df['job_run_id'].nunique()} sessions"
@@ -284,6 +303,9 @@ def _fetch_glue_from_cloudwatch(
     """Pull Glue metrics from CloudWatch via list_metrics + get_metric_data."""
     from datetime import datetime, timedelta, timezone
     import boto3
+    import time as _time
+
+    logger.debug("[GlueMetrics] _fetch_glue_from_cloudwatch START — namespace=%s, mode=%s", namespace, fetch_mode)
 
     session = boto3.Session(profile_name=AWS_PROFILE)
     cw = session.client("cloudwatch")
@@ -299,8 +321,13 @@ def _fetch_glue_from_cloudwatch(
         query_end = datetime.now(timezone.utc)
         query_start = query_end - timedelta(hours=1)
 
+    logger.debug("[GlueMetrics] Time window: %s → %s", query_start, query_end)
+
     # --- Step 1: Discover sessions via list_metrics ---
+    _t0 = _time.monotonic()
     sessions, discovered_metrics = _discover_glue_sessions(cw, namespace, GLUE_SESSION_ID_PREFIX)
+    logger.debug("[GlueMetrics] _discover_glue_sessions took %.2fs — %d sessions, %d metrics discovered",
+                 _time.monotonic() - _t0, len(sessions), len(discovered_metrics))
     if not sessions:
         logger.info("No Glue sessions found matching prefix '%s'", GLUE_SESSION_ID_PREFIX)
         return pd.DataFrame()
@@ -313,9 +340,14 @@ def _fetch_glue_from_cloudwatch(
     target_metrics = sorted(set(predefined) | discovered_metrics)
     stat_list = statistics or ["Average", "Maximum", "Minimum", "Sum", "SampleCount"]
 
+    logger.debug("[GlueMetrics] Target metrics count: %d (predefined=%d, discovered=%d)",
+                 len(target_metrics), len(predefined), len(discovered_metrics))
+
     all_records = []
 
-    for sess_job_name, sess_run_id in sessions:
+    for idx, (sess_job_name, sess_run_id) in enumerate(sessions):
+        logger.debug("[GlueMetrics] Processing session %d/%d: job=%s run_id=%s",
+                     idx + 1, len(sessions), sess_job_name, sess_run_id)
         metric_queries = []
         query_id_map = {}
 
@@ -342,12 +374,21 @@ def _fetch_glue_from_cloudwatch(
             })
             query_id_map[safe_id] = (metric_name, sess_job_name, sess_run_id)
 
+        total_batches = (len(metric_queries) + 499) // 500
         for batch_start in range(0, len(metric_queries), 500):
+            batch_num = batch_start // 500 + 1
             batch = metric_queries[batch_start:batch_start + 500]
+            logger.debug("[GlueMetrics]   Batch %d/%d (%d queries) for session %s",
+                         batch_num, total_batches, len(batch), sess_run_id)
+            _tb = _time.monotonic()
             records = _run_get_metric_data(
                 cw, batch, query_id_map, query_start, query_end, period, stat_list,
             )
+            logger.debug("[GlueMetrics]   Batch %d/%d returned %d records in %.2fs",
+                         batch_num, total_batches, len(records), _time.monotonic() - _tb)
             all_records.extend(records)
+
+    logger.debug("[GlueMetrics] Total records collected: %d", len(all_records))
 
     if not all_records:
         return pd.DataFrame()
@@ -380,11 +421,16 @@ def _discover_glue_sessions(cw, namespace: str, prefix: str) -> tuple[list[tuple
     paginator = cw.get_paginator("list_metrics")
 
     # --- Pass 1: Quick probe to find JobNames via a single known metric ---
+    logger.debug("[GlueMetrics] _discover_glue_sessions Pass 1: probing glue.ALL.jvm.heap.usage for prefix='%s'", prefix)
+    import time as _time
+    _t0 = _time.monotonic()
+    page_count = 0
     probe_iter = paginator.paginate(
         Namespace=namespace,
         MetricName="glue.ALL.jvm.heap.usage",
     )
     for page in probe_iter:
+        page_count += 1
         for metric in page.get("Metrics", []):
             dims = {d["Name"]: d["Value"] for d in metric.get("Dimensions", [])}
             job_name = dims.get("JobName", "")
@@ -392,8 +438,11 @@ def _discover_glue_sessions(cw, namespace: str, prefix: str) -> tuple[list[tuple
             if job_run_id and job_run_id.startswith(prefix):
                 sessions.add((job_name, job_run_id))
                 job_names.add(job_name)
+    logger.debug("[GlueMetrics] Pass 1 done: %d pages, %d sessions, %d job_names in %.2fs",
+                 page_count, len(sessions), len(job_names), _time.monotonic() - _t0)
 
     if not job_names:
+        logger.debug("[GlueMetrics] No job_names found in Pass 1 — returning empty")
         return [], set()
 
     logger.info("Discovered %d JobName(s) matching prefix '%s': %s",
@@ -402,11 +451,15 @@ def _discover_glue_sessions(cw, namespace: str, prefix: str) -> tuple[list[tuple
     # --- Pass 2: Per-JobName scan to discover all metrics (incl. per-executor) ---
     discovered_metrics: set[str] = set()
     for jn in job_names:
+        logger.debug("[GlueMetrics] Pass 2: scanning all metrics for JobName='%s'", jn)
+        _t1 = _time.monotonic()
+        p2_pages = 0
         jn_iter = paginator.paginate(
             Namespace=namespace,
             Dimensions=[{"Name": "JobName", "Value": jn}],
         )
         for page in jn_iter:
+            p2_pages += 1
             for metric in page.get("Metrics", []):
                 dims = {d["Name"]: d["Value"] for d in metric.get("Dimensions", [])}
                 job_run_id = dims.get("JobRunId", "")
@@ -417,9 +470,14 @@ def _discover_glue_sessions(cw, namespace: str, prefix: str) -> tuple[list[tuple
                 if job_run_id and job_run_id.startswith(prefix):
                     sessions.add((jn, job_run_id))
 
+        logger.debug("[GlueMetrics] Pass 2 for '%s': %d pages, %d metrics discovered so far in %.2fs",
+                     jn, p2_pages, len(discovered_metrics), _time.monotonic() - _t1)
+
         # Add ALL-level aggregate entry for this JobName
         sessions.add((jn, "ALL"))
 
+    logger.debug("[GlueMetrics] _discover_glue_sessions DONE — %d total sessions, %d unique metrics",
+                 len(sessions), len(discovered_metrics))
     return sorted(sessions), discovered_metrics
 
 
@@ -433,10 +491,16 @@ def _run_get_metric_data(
     stat_list: list[str],
 ) -> list[dict]:
     """Execute get_metric_data and return flat records."""
+    import time as _time
     records = []
     next_token = None
+    page_num = 0
+
+    logger.debug("[GlueMetrics] _run_get_metric_data START — %d queries", len(queries))
+    _t0 = _time.monotonic()
 
     while True:
+        page_num += 1
         kwargs = {
             "MetricDataQueries": queries,
             "StartTime": start_time,
@@ -445,7 +509,12 @@ def _run_get_metric_data(
         if next_token:
             kwargs["NextToken"] = next_token
 
+        logger.debug("[GlueMetrics]   get_metric_data page %d (token=%s)...",
+                     page_num, "yes" if next_token else "no")
+        _tp = _time.monotonic()
         resp = cw.get_metric_data(**kwargs)
+        logger.debug("[GlueMetrics]   page %d returned in %.2fs — %d results",
+                     page_num, _time.monotonic() - _tp, len(resp.get("MetricDataResults", [])))
 
         for result in resp.get("MetricDataResults", []):
             query_id = result["Id"]
@@ -478,13 +547,21 @@ def _run_get_metric_data(
         if not next_token:
             break
 
+    logger.debug("[GlueMetrics] _run_get_metric_data Average pass done: %d records in %.2fs",
+                 len(records), _time.monotonic() - _t0)
+
+    logger.debug("[GlueMetrics] Starting _backfill_stats for %d records...", len(records))
+    _tb = _time.monotonic()
     _backfill_stats(cw, queries, query_id_map, start_time, end_time, period, records)
+    logger.debug("[GlueMetrics] _backfill_stats done in %.2fs", _time.monotonic() - _tb)
     return records
 
 
 def _backfill_stats(cw, original_queries, query_id_map, start_time, end_time, period, records):
     """Fetch Maximum, Minimum, Sum, SampleCount stats and merge into records."""
+    import time as _time
     if not records:
+        logger.debug("[GlueMetrics] _backfill_stats: no records, skipping")
         return
 
     rec_lookup = {}
@@ -494,6 +571,8 @@ def _backfill_stats(cw, original_queries, query_id_map, start_time, end_time, pe
 
     for stat_name, col_name in [("Maximum", "maximum"), ("Minimum", "minimum"),
                                  ("Sum", "sum"), ("SampleCount", "sample_count")]:
+        logger.debug("[GlueMetrics] _backfill_stats: fetching stat=%s for %d queries", stat_name, len(original_queries))
+        _ts = _time.monotonic()
         stat_queries = []
         for q in original_queries:
             sq = {
@@ -509,7 +588,9 @@ def _backfill_stats(cw, original_queries, query_id_map, start_time, end_time, pe
         for batch_start in range(0, len(stat_queries), 500):
             batch = stat_queries[batch_start:batch_start + 500]
             next_token = None
+            page_num = 0
             while True:
+                page_num += 1
                 kwargs = {
                     "MetricDataQueries": batch,
                     "StartTime": start_time,
@@ -518,6 +599,7 @@ def _backfill_stats(cw, original_queries, query_id_map, start_time, end_time, pe
                 if next_token:
                     kwargs["NextToken"] = next_token
 
+                logger.debug("[GlueMetrics]   _backfill %s page %d...", stat_name, page_num)
                 resp = cw.get_metric_data(**kwargs)
                 for result in resp.get("MetricDataResults", []):
                     qid = result["Id"]
@@ -532,6 +614,7 @@ def _backfill_stats(cw, original_queries, query_id_map, start_time, end_time, pe
                 next_token = resp.get("NextToken")
                 if not next_token:
                     break
+        logger.debug("[GlueMetrics] _backfill_stats: stat=%s done in %.2fs", stat_name, _time.monotonic() - _ts)
 
 
 def _extract_entity_from_run_id(job_run_id: str) -> str:

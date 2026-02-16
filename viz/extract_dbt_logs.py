@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
-DEFAULT_PROFILE = "mondayskills.development"
+DEFAULT_PROFILE = "dev2"
 DEFAULT_LOG_GROUP = "EtlComputeStack-DbtTaskDefinitionDbtContainerLogGroupE420E81B-W7fZGqD3w8jD"
 DEFAULT_HOURS = 24
 OUTPUT_FILE = "sample_dbt_logs.csv"

@@ -24,7 +24,7 @@ from data_provider import fetch_glue_job_metrics
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--hours", type=float, default=1)
-    parser.add_argument("--profile", default="mondayskills.development")
+    parser.add_argument("--profile", default="dev2")
     parser.add_argument("--skip-glue", action="store_true", help="Skip Glue metrics fetch")
     args = parser.parse_args()
 
