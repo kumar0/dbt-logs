@@ -1,3 +1,5 @@
+{{ config(materialized='view') }}
+
 select
     customer_id,
     first_name,

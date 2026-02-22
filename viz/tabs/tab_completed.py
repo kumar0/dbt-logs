@@ -36,7 +36,7 @@ def render(classified: pd.DataFrame, exec_summary: pd.DataFrame, raw_df: pd.Data
         completed = completed[completed["entity"] == selected_entity]
 
     if completed.empty:
-        st.info("No completed models match the current filters.")
+        st.info("No completed views match the current filters.")
     else:
         status_counts = completed["final_status"].value_counts().reset_index()
         status_counts.columns = ["Status", "Count"]
@@ -47,25 +47,13 @@ def render(classified: pd.DataFrame, exec_summary: pd.DataFrame, raw_df: pd.Data
                 status_counts, values="Count", names="Status",
                 color="Status",
                 color_discrete_map={"OK": "#4ade80", "pass": "#4ade80", "error": "#f87171", "skipped": "#fbbf24"},
-                title="Model Status Distribution", hole=0.4,
+                title="View Status Distribution", hole=0.4,
             )
             fig_pie.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#e0e0e0")
             st.plotly_chart(fig_pie, use_container_width=True)
 
         with col_b:
-            display_df = completed[["entity", "model_name", "final_status", "start_time", "end_time", "duration_s", "thread"]].copy()
-            display_df["Status"] = display_df["final_status"].apply(lambda s: f"{status_icon(s)} {s}")
-            display_df["start_time"] = display_df["start_time"].dt.strftime("%H:%M:%S")
-            display_df["end_time"] = display_df["end_time"].dt.strftime("%H:%M:%S")
-            display_df["duration_s"] = display_df["duration_s"].apply(lambda x: f"{x:.1f}s" if pd.notna(x) else "N/A")
-            display_df = display_df.rename(columns={
-                "entity": "Entity", "model_name": "Model", "start_time": "Started",
-                "end_time": "Ended", "duration_s": "Duration", "thread": "Thread",
-            })
-            st.dataframe(
-                display_df[["Entity", "Model", "Status", "Started", "Ended", "Duration", "Thread"]],
-                use_container_width=True, hide_index=True, height=400,
-            )
+            _render_grouped_table(completed)
 
         # --- Error drill-down ---
         _render_error_drilldown(completed, raw_df)
@@ -85,13 +73,63 @@ def render(classified: pd.DataFrame, exec_summary: pd.DataFrame, raw_df: pd.Data
         )
 
 
+def _render_grouped_table(completed: pd.DataFrame):
+    """Render views grouped by entity with collapsible rows."""
+    multi_invocation = completed["invocation_id"].nunique() > 1
+    st.markdown("**Views by Entity**")
+
+    for entity, group in completed.groupby("entity", sort=True):
+        error_count = (group["final_status"] == "error").sum()
+        summary_icon = "❌" if error_count > 0 else "✅"
+
+        if multi_invocation:
+            # Compute per-invocation totals, then summarise across invocations
+            inv_totals = group.groupby("invocation_id")["duration_s"].sum()
+            dur_min, dur_avg, dur_max = inv_totals.min(), inv_totals.mean(), inv_totals.max()
+            inv_count = inv_totals.nunique()
+            dur_summary = (
+                f"min {dur_min:.1f}s / avg {dur_avg:.1f}s / max {dur_max:.1f}s"
+                f" across {inv_count} runs"
+            )
+        else:
+            total_dur = group["duration_s"].sum()
+            dur_summary = f"Total: {total_dur:.1f}s ({total_dur/60:.1f}m)"
+
+        model_count = group["model_name"].nunique()
+        label = (
+            f"{summary_icon} **{entity}** — "
+            f"{model_count} view{'s' if model_count != 1 else ''} | "
+            f"{dur_summary}"
+            + (f" | ⚠️ {error_count} error{'s' if error_count != 1 else ''}" if error_count > 0 else "")
+        )
+
+        with st.expander(label, expanded=False):
+            rows = []
+            for _, r in group.sort_values("duration_s", ascending=False).iterrows():
+                row = {
+                    "View": r["model_name"],
+                    "Status": f"{status_icon(r['final_status'])} {r['final_status']}",
+                    "Started": r["start_time"].strftime("%H:%M:%S") if pd.notna(r["start_time"]) else "N/A",
+                    "Ended": r["end_time"].strftime("%H:%M:%S") if pd.notna(r["end_time"]) else "N/A",
+                    "Duration": f"{r['duration_s']:.1f}s" if pd.notna(r["duration_s"]) else "N/A",
+                    "Thread": r["thread"],
+                }
+                if multi_invocation:
+                    row["Invocation"] = r["invocation_id"][:12] + "…"
+                rows.append(row)
+
+            cols = ["Invocation", "View", "Status", "Started", "Ended", "Duration", "Thread"] if multi_invocation \
+                else ["View", "Status", "Started", "Ended", "Duration", "Thread"]
+            st.dataframe(pd.DataFrame(rows)[cols], use_container_width=True, hide_index=True)
+
+
 def _render_error_drilldown(completed: pd.DataFrame, raw_df: pd.DataFrame | None):
-    """Show expandable error details for every failed model."""
+    """Show expandable error details for every failed view."""
     failed = completed[completed["final_status"] == "error"]
     if failed.empty:
         return
 
-    st.markdown("### ❌ Failed Models — Error Details")
+    st.markdown("### ❌ Failed Views — Error Details")
 
     # Build a lookup of error messages from the raw log data
     error_lookup: dict[tuple[str, str], str] = {}

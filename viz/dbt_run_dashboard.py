@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import time as _time
 
 from streamlit_autorefresh import st_autorefresh
 from data_provider import fetch_dbt_run_logs, fetch_glue_job_metrics, FetchMode, last_dbt_fetch_info, last_glue_fetch_info
@@ -17,7 +18,7 @@ if "df_raw" not in st.session_state:
 if "glue_raw" not in st.session_state:
     st.session_state.glue_raw = None
 if "fetch_requested" not in st.session_state:
-    st.session_state.fetch_requested = True      # first load triggers fetch
+    st.session_state.fetch_requested = False     # user must click Fetch Data
 if "run_just_completed" not in st.session_state:
     st.session_state.run_just_completed = False
 
@@ -52,15 +53,27 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- Default time window: today, from (now - 1h) to now ---
-_now = datetime.now()
-_default_from_time = (_now - timedelta(hours=1)).time().replace(second=0, microsecond=0)
-_default_to_time = _now.time().replace(second=0, microsecond=0)
-_default_date = _now.date()
+# --- Default time window: local now - 3h to now ---
+_local_tz = datetime.now().astimezone().tzinfo   # system local timezone
+_now_local = datetime.now(_local_tz)
+_default_from_time = (_now_local - timedelta(hours=3)).time().replace(second=0, microsecond=0)
+_default_to_time = _now_local.time().replace(second=0, microsecond=0)
+_default_date = _now_local.date()
+
+# Effective end time — updated by auto-refresh without touching widget state
+if "effective_to_time" not in st.session_state:
+    st.session_state.effective_to_time = _default_to_time
+if "effective_to_date" not in st.session_state:
+    st.session_state.effective_to_date = _default_date
 
 # --- Header ---
 st.markdown("## 🔄 Data Flow Monitor")
-st.caption("Real-time monitoring dashboard for dbt model executions")
+st.caption("Real-time monitoring dashboard for dbt view executions")
+
+# Resolve refresh interval early so widgets can use it
+refresh_seconds_map = {"Off": 0, "10s": 10, "30s": 30, "1m": 60, "5m": 300, "10m": 600}
+_current_auto_refresh = st.session_state.get("auto_refresh", "Off")
+refresh_interval_s = refresh_seconds_map.get(_current_auto_refresh, 0)
 
 # --- Date Range & Controls ---
 ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4, ctrl_col5 = st.columns([2.5, 1, 1, 1.5, 1])
@@ -78,11 +91,17 @@ with ctrl_col2:
         key="from_time",
     )
 with ctrl_col3:
-    to_time = st.time_input(
-        "To Time",
-        value=_default_to_time,
-        key="to_time",
-    )
+    if refresh_interval_s > 0:
+        # Show sliding end time as read-only text during auto-refresh
+        st.markdown('<div style="margin-top:4px"><label style="font-size:14px;color:#a0a0b0">To Time</label></div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="padding:6px 0;font-size:15px">🔄 {st.session_state.effective_to_time.strftime("%H:%M")}</div>', unsafe_allow_html=True)
+        to_time = st.session_state.effective_to_time
+    else:
+        to_time = st.time_input(
+            "To Time",
+            value=_default_to_time,
+            key="to_time",
+        )
 with ctrl_col4:
     auto_refresh = st.selectbox(
         "Auto Refresh",
@@ -97,7 +116,6 @@ with ctrl_col5:
         st.rerun()
 
 # Auto-refresh (JS-based timer via sidebar to avoid layout shift)
-refresh_seconds_map = {"Off": 0, "10s": 10, "30s": 30, "1m": 60, "5m": 300, "10m": 600}
 refresh_interval_s = refresh_seconds_map.get(auto_refresh, 0)
 if refresh_interval_s > 0:
     with st.sidebar:
@@ -122,8 +140,28 @@ if _should_fetch:
         since_ts = st.session_state.last_fetch_ts
 
     _use_realtime = st.session_state.run_just_completed
-    _start_iso = pd.Timestamp(datetime.combine(date_from, from_time)).isoformat()
-    _end_iso = pd.Timestamp(datetime.combine(date_to, to_time)).isoformat()
+    # Combine date + time in local timezone, then convert to UTC for CloudWatch
+    # When auto-refresh is active, always advance "to" to now so the window slides forward
+    _local_tz = datetime.now().astimezone().tzinfo
+    _now_local = datetime.now(_local_tz)
+    _start_local = datetime.combine(date_from, from_time).replace(tzinfo=_local_tz)
+    if refresh_interval_s > 0 and fetch_mode == "delta":
+        _end_local = _now_local
+        # Advance effective end time in session state (not the widget key)
+        st.session_state.effective_to_time = _now_local.time().replace(second=0, microsecond=0)
+        st.session_state.effective_to_date = _now_local.date()
+        date_to = st.session_state.effective_to_date
+    else:
+        _end_local = datetime.combine(date_to, to_time).replace(tzinfo=_local_tz)
+    _start_utc = _start_local.astimezone(timezone.utc)
+    _end_utc = _end_local.astimezone(timezone.utc)
+    _start_iso = _start_utc.isoformat()
+    _end_iso = _end_utc.isoformat()
+
+    if _start_iso >= _end_iso:
+        st.warning("⚠️ 'From' time must be before 'To' time. Please adjust the time range.")
+        st.session_state.fetch_requested = False
+        st.stop()
 
     try:
         new_dbt = fetch_dbt_run_logs(
@@ -137,22 +175,28 @@ if _should_fetch:
         new_dbt = pd.DataFrame()
         st.error(f"Failed to fetch dbt logs: {e}")
 
-    try:
-        new_glue = fetch_glue_job_metrics(
-            start_time=_start_iso,
-            end_time=_end_iso,
-            fetch_mode=fetch_mode,
-            since=since_ts,
-        )
-    except Exception as e:
+    # Fetch Glue metrics on every full fetch (independent of dbt results)
+    if fetch_mode == "full":
+        try:
+            new_glue = fetch_glue_job_metrics(
+                start_time=_start_iso,
+                end_time=_end_iso,
+                fetch_mode=fetch_mode,
+                since=since_ts,
+            )
+        except Exception as e:
+            new_glue = pd.DataFrame()
+            st.error(f"Failed to fetch Glue metrics: {e}")
+    else:
         new_glue = pd.DataFrame()
-        st.error(f"Failed to fetch Glue metrics: {e}")
 
     if fetch_mode == "full":
         st.session_state.df_raw = new_dbt
-        st.session_state.glue_raw = new_glue
+        # Only overwrite glue_raw if we actually got data, so existing data persists
+        if not new_glue.empty:
+            st.session_state.glue_raw = new_glue
     else:
-        # Merge delta into existing data
+        # Merge delta dbt logs into existing data
         if not new_dbt.empty:
             st.session_state.df_raw = pd.concat(
                 [st.session_state.df_raw, new_dbt]
@@ -161,15 +205,9 @@ if _should_fetch:
             if "record_type" in new_dbt.columns and new_dbt["record_type"].isin(
                 ["EXECUTION_DURATION", "EXECUTION_STATUS"]
             ).any():
-                st.session_state.fetch_requested = True
                 st.session_state.run_just_completed = True
 
-        if not new_glue.empty:
-            st.session_state.glue_raw = pd.concat(
-                [st.session_state.glue_raw, new_glue]
-            ).drop_duplicates().reset_index(drop=True)
-
-    st.session_state.last_fetch_ts = pd.Timestamp.now().isoformat()
+    st.session_state.last_fetch_ts = pd.Timestamp.now(tz="UTC").isoformat()
     st.session_state.fetch_requested = False
     st.session_state.run_just_completed = False
 
@@ -193,8 +231,11 @@ if _glue_empty:
     glue_raw = pd.DataFrame(columns=["timestamp"])
 
 # --- Filter data ---
-filter_start = pd.Timestamp(datetime.combine(date_from, from_time), tz="UTC")
-filter_end = pd.Timestamp(datetime.combine(date_to, to_time), tz="UTC")
+_local_tz = datetime.now().astimezone().tzinfo
+filter_start = datetime.combine(date_from, from_time).replace(tzinfo=_local_tz).astimezone(timezone.utc)
+filter_start = pd.Timestamp(filter_start)
+filter_end = datetime.combine(date_to, to_time).replace(tzinfo=_local_tz).astimezone(timezone.utc)
+filter_end = pd.Timestamp(filter_end)
 
 df = df_raw[
     (df_raw["start_time"] >= filter_start) | (df_raw["start_time"].isna())
@@ -271,19 +312,19 @@ else:
 
 col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
 with col1:
-    st.markdown(f'<div class="metric-card"><h2>Total Models</h2><h1>{total_models}</h1></div>', unsafe_allow_html=True)
-with col2:
-    st.markdown(f'<div class="metric-card"><h2>Succeeded</h2><h1 class="status-ok">{ok_count}</h1></div>', unsafe_allow_html=True)
-with col3:
-    st.markdown(f'<div class="metric-card"><h2>Failed</h2><h1 class="status-error">{error_count}</h1></div>', unsafe_allow_html=True)
-with col4:
-    st.markdown(f'<div class="metric-card"><h2>Skipped</h2><h1 class="status-skip">{skipped_count}</h1></div>', unsafe_allow_html=True)
-with col5:
-    st.markdown(f'<div class="metric-card"><h2>In Progress</h2><h1 class="status-running">{running_count}</h1></div>', unsafe_allow_html=True)
-with col6:
-    st.markdown(f'<div class="metric-card"><h2>Tests ({total_tests})</h2><h1 style="color:#a78bfa;">{tests_label}</h1></div>', unsafe_allow_html=True)
-with col7:
     st.markdown(f'<div class="metric-card"><h2>Entities</h2><h1>{unique_entities}</h1></div>', unsafe_allow_html=True)
+with col2:
+    st.markdown(f'<div class="metric-card"><h2>Total Views</h2><h1>{total_models}</h1></div>', unsafe_allow_html=True)
+with col3:
+    st.markdown(f'<div class="metric-card"><h2>Succeeded</h2><h1 class="status-ok">{ok_count}</h1></div>', unsafe_allow_html=True)
+with col4:
+    st.markdown(f'<div class="metric-card"><h2>Failed</h2><h1 class="status-error">{error_count}</h1></div>', unsafe_allow_html=True)
+with col5:
+    st.markdown(f'<div class="metric-card"><h2>Skipped</h2><h1 class="status-skip">{skipped_count}</h1></div>', unsafe_allow_html=True)
+with col6:
+    st.markdown(f'<div class="metric-card"><h2>In Progress</h2><h1 class="status-running">{running_count}</h1></div>', unsafe_allow_html=True)
+with col7:
+    st.markdown(f'<div class="metric-card"><h2>Tests ({total_tests})</h2><h1 style="color:#a78bfa;">{tests_label}</h1></div>', unsafe_allow_html=True)
 
 st.divider()
 
@@ -316,5 +357,5 @@ dbt_source_label = f'☁️ CloudWatch ({_src_lg}) — {_src_detail}' if _src_lg
 _glue_detail = last_glue_fetch_info["detail"]
 glue_source_label = f'☁️ CloudWatch — {_glue_detail}'
 
-st.caption(f"Dashboard loaded at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} · Filtered: {range_from_str} → {range_to_str}{refresh_label}")
+st.caption(f"Dashboard loaded at {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC · Filtered: {range_from_str} → {range_to_str}{refresh_label}")
 st.caption(f"dbt logs: {dbt_source_label} · Glue metrics: {glue_source_label}")

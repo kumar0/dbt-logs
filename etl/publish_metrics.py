@@ -23,6 +23,16 @@ def publish_metrics():
 
     namespace = "ETL/dbt"
     timestamp = datetime.utcnow()
+    entity_name = os.environ.get("ENTITY_NAME", "all")
+    glue_session_id = os.environ.get("GLUE_SESSION_ID", "unknown")
+
+    # Base dimensions included on every metric
+    base_dimensions = [
+        {"Name": "Project", "Value": "etl_pipeline"},
+        {"Name": "Environment", "Value": os.environ.get("DBT_TARGET", "dev")},
+        {"Name": "EntityName", "Value": entity_name},
+        {"Name": "GlueSessionId", "Value": glue_session_id},
+    ]
 
     # Summary metrics
     results = data.get("results", [])
@@ -47,10 +57,7 @@ def publish_metrics():
             "Timestamp": timestamp,
             "Value": m["Value"],
             "Unit": m["Unit"],
-            "Dimensions": [
-                {"Name": "Project", "Value": "etl_pipeline"},
-                {"Name": "Environment", "Value": os.environ.get("DBT_TARGET", "dev")},
-            ],
+            "Dimensions": base_dimensions,
         })
 
     # Per-model execution time
@@ -59,15 +66,15 @@ def publish_metrics():
         exec_time = r.get("execution_time", 0)
         status = r.get("status", "unknown")
         resource_type = uid.split(".")[0] if "." in uid else "unknown"
+        model_name = uid.split(".")[-1] if "." in uid else uid
 
         metric_data.append({
             "MetricName": "ModelExecutionTime",
             "Timestamp": timestamp,
             "Value": exec_time,
             "Unit": "Seconds",
-            "Dimensions": [
-                {"Name": "Project", "Value": "etl_pipeline"},
-                {"Name": "ModelName", "Value": uid.split(".")[-1] if "." in uid else uid},
+            "Dimensions": base_dimensions + [
+                {"Name": "ModelName", "Value": model_name},
                 {"Name": "ResourceType", "Value": resource_type},
             ],
         })
@@ -77,9 +84,8 @@ def publish_metrics():
             "Timestamp": timestamp,
             "Value": 1 if status in ("success", "pass") else 0,
             "Unit": "Count",
-            "Dimensions": [
-                {"Name": "Project", "Value": "etl_pipeline"},
-                {"Name": "ModelName", "Value": uid.split(".")[-1] if "." in uid else uid},
+            "Dimensions": base_dimensions + [
+                {"Name": "ModelName", "Value": model_name},
                 {"Name": "Status", "Value": status},
             ],
         })

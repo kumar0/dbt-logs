@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # Defaults
 # ---------------------------------------------------------------------------
 DEFAULT_PROFILE = "dev2"
-DEFAULT_LOG_GROUP = "EtlComputeStack-DbtTaskDefinitionDbtContainerLogGroupE420E81B-W7fZGqD3w8jD"
+DEFAULT_LOG_GROUP = "/ecs/ecs-dpinv-dbt"
 DEFAULT_HOURS = 24
 OUTPUT_FILE = "sample_dbt_logs.csv"
 
@@ -415,19 +415,23 @@ def parse_dbt_json_events(raw_rows: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 def _extract_entity(unique_id: str) -> str:
     """
-    Extract entity from dbt unique_id like 'model.etl.stg_asset_class'.
-    Strips layer prefix (stg_/int_/dim_/fact_) and suffixes (_prepared/_validated/_raw).
+    Extract entity from dbt node_path like 'model.etl_pipeline.avqdf.payments_transform.stg_payments'.
+    Returns the folder name under avqdf with '_transform' stripped (e.g. 'payments').
+    Falls back to the model name if the path structure is unexpected.
     """
     parts = unique_id.split(".")
+    # node_path has at least 5 parts: type.project.avqdf.<folder>.<model>
+    if len(parts) >= 5:
+        folder = parts[-2]
+        if folder.endswith("_transform"):
+            return folder[: -len("_transform")]
+        return folder
+    # fallback: strip layer prefix from model name
     if len(parts) >= 3:
         name = parts[-1]
         for prefix in ("stg_", "int_", "dim_", "fact_"):
             if name.startswith(prefix):
-                remainder = name[len(prefix):]
-                for suffix in ("_prepared", "_validated", "_raw"):
-                    if remainder.endswith(suffix):
-                        remainder = remainder[: -len(suffix)]
-                return remainder
+                return name[len(prefix):]
         return name
     return ""
 
@@ -465,7 +469,7 @@ def _make_record(**kwargs) -> dict:
 # ---------------------------------------------------------------------------
 def discover_log_group(session: boto3.Session) -> str | None:
     client = session.client("logs")
-    candidates = ["EtlComputeStack-DbtTaskDefinition", "/ecs/etl-dbt-task", "/ecs/EtlComputeStack", "/ecs/etl-dbt", "etl-dbt"]
+    candidates = ["EtlComputeStack-DbtTaskDefinitionDbtContainerLogGroup", "EtlComputeStack-DbtTaskDefinition", "/ecs/etl-dbt-task", "/ecs/EtlComputeStack", "/ecs/etl-dbt", "etl-dbt"]
     try:
         paginator = client.get_paginator("describe_log_groups")
         for page in paginator.paginate():

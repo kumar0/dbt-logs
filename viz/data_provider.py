@@ -143,11 +143,14 @@ def _fetch_from_cloudwatch(
 
     # Resolve time window
     if fetch_mode == "delta" and since:
-        query_start = datetime.fromisoformat(since).replace(tzinfo=timezone.utc)
+        _since_dt = datetime.fromisoformat(since)
+        query_start = _since_dt.astimezone(timezone.utc) if _since_dt.tzinfo else _since_dt.replace(tzinfo=timezone.utc)
         query_end = datetime.now(timezone.utc)
     elif start_time and end_time:
-        query_start = datetime.fromisoformat(start_time).replace(tzinfo=timezone.utc)
-        query_end = datetime.fromisoformat(end_time).replace(tzinfo=timezone.utc)
+        _st = datetime.fromisoformat(start_time)
+        _et = datetime.fromisoformat(end_time)
+        query_start = _st.astimezone(timezone.utc) if _st.tzinfo else _st.replace(tzinfo=timezone.utc)
+        query_end = _et.astimezone(timezone.utc) if _et.tzinfo else _et.replace(tzinfo=timezone.utc)
     else:
         query_end = datetime.now(timezone.utc)
         query_start = query_end - timedelta(hours=1)
@@ -248,11 +251,13 @@ def fetch_glue_job_metrics(
     statistics: Optional[list[str]] = None,
     fetch_mode: FetchMode = "full",
     since: Optional[str] = None,
+    entity: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Return Glue job CloudWatch metrics as a DataFrame.
 
     Discovers sessions whose JobRunId starts with GLUE_SESSION_ID_PREFIX.
+    Pass *entity* to restrict results to a single entity (e.g. "customers").
 
     Returns
     -------
@@ -262,9 +267,13 @@ def fetch_glue_job_metrics(
                  sample_count, label, unit, category, description,
                  run_id_type
     """
-    logger.debug("[GlueMetrics] fetch_glue_job_metrics called — mode=%s, prefix=%s, start=%s, end=%s",
-                 fetch_mode, GLUE_SESSION_ID_PREFIX, start_time, end_time)
+    logger.debug("[GlueMetrics] fetch_glue_job_metrics called — mode=%s, prefix=%s, entity=%s, start=%s, end=%s",
+                 fetch_mode, GLUE_SESSION_ID_PREFIX, entity, start_time, end_time)
     logger.debug("[GlueMetrics] Using AWS_PROFILE=%s", AWS_PROFILE)
+
+    # Build entity-specific prefix when a single entity is requested.
+    # JobName convention: {prefix}_{entity}  e.g. hk_dbt_asset
+    session_prefix = f"{GLUE_SESSION_ID_PREFIX}_{entity}" if entity else GLUE_SESSION_ID_PREFIX
 
     df = _fetch_glue_from_cloudwatch(
         namespace=namespace,
@@ -277,6 +286,7 @@ def fetch_glue_job_metrics(
         statistics=statistics,
         fetch_mode=fetch_mode,
         since=since,
+        session_prefix=session_prefix,
     )
     logger.debug("[GlueMetrics] _fetch_glue_from_cloudwatch returned %d rows", len(df))
     if not df.empty:
@@ -299,13 +309,16 @@ def _fetch_glue_from_cloudwatch(
     statistics: Optional[list[str]],
     fetch_mode: FetchMode,
     since: Optional[str],
+    session_prefix: Optional[str] = None,
 ) -> pd.DataFrame:
     """Pull Glue metrics from CloudWatch via list_metrics + get_metric_data."""
     from datetime import datetime, timedelta, timezone
     import boto3
     import time as _time
 
-    logger.debug("[GlueMetrics] _fetch_glue_from_cloudwatch START — namespace=%s, mode=%s", namespace, fetch_mode)
+    effective_prefix = session_prefix or GLUE_SESSION_ID_PREFIX
+    logger.debug("[GlueMetrics] _fetch_glue_from_cloudwatch START — namespace=%s, mode=%s, prefix=%s",
+                 namespace, fetch_mode, effective_prefix)
 
     session = boto3.Session(profile_name=AWS_PROFILE)
     cw = session.client("cloudwatch")
@@ -321,18 +334,24 @@ def _fetch_glue_from_cloudwatch(
         query_end = datetime.now(timezone.utc)
         query_start = query_end - timedelta(hours=1)
 
+    # Guard: CloudWatch requires EndTime > StartTime
+    if query_end <= query_start:
+        logger.warning("[GlueMetrics] EndTime (%s) <= StartTime (%s); adjusting EndTime to StartTime + 1h",
+                       query_end, query_start)
+        query_end = query_start + timedelta(hours=1)
+
     logger.debug("[GlueMetrics] Time window: %s → %s", query_start, query_end)
 
     # --- Step 1: Discover sessions via list_metrics ---
     _t0 = _time.monotonic()
-    sessions, discovered_metrics = _discover_glue_sessions(cw, namespace, GLUE_SESSION_ID_PREFIX)
+    sessions, discovered_metrics, job_name_to_entity = _discover_glue_sessions(cw, namespace, effective_prefix)
     logger.debug("[GlueMetrics] _discover_glue_sessions took %.2fs — %d sessions, %d metrics discovered",
                  _time.monotonic() - _t0, len(sessions), len(discovered_metrics))
     if not sessions:
-        logger.info("No Glue sessions found matching prefix '%s'", GLUE_SESSION_ID_PREFIX)
+        logger.info("No Glue sessions found matching prefix '%s'", effective_prefix)
         return pd.DataFrame()
 
-    logger.info("Discovered %d Glue sessions matching prefix '%s'", len(sessions), GLUE_SESSION_ID_PREFIX)
+    logger.info("Discovered %d Glue sessions matching prefix '%s'", len(sessions), effective_prefix)
 
     # --- Step 2: Build metric queries for each session ---
     # Merge predefined metrics with dynamically discovered ones (includes per-executor)
@@ -383,6 +402,7 @@ def _fetch_glue_from_cloudwatch(
             _tb = _time.monotonic()
             records = _run_get_metric_data(
                 cw, batch, query_id_map, query_start, query_end, period, stat_list,
+                job_name_to_entity=job_name_to_entity,
             )
             logger.debug("[GlueMetrics]   Batch %d/%d returned %d records in %.2fs",
                          batch_num, total_batches, len(records), _time.monotonic() - _tb)
@@ -398,33 +418,43 @@ def _fetch_glue_from_cloudwatch(
     return df
 
 
-def _discover_glue_sessions(cw, namespace: str, prefix: str) -> tuple[list[tuple[str, str]], set[str]]:
+def _discover_glue_sessions(cw, namespace: str, prefix: str) -> tuple[list[tuple[str, str]], set[str], dict[str, str]]:
     """Use list_metrics to find (JobName, JobRunId) pairs matching the prefix.
 
+    Glue interactive sessions publish metrics where:
+      - JobRunId = the session ID (e.g. hk_dbt_dim_customers_18022026)
+      - JobName  = an internal UUID assigned by Glue
+
+    So we match on JobRunId.startswith(prefix), not JobName.
+
     Two-pass discovery:
-    1. Quick probe with a known metric to find JobNames whose JobRunId
-       starts with *prefix*.
+    1. Probe a known metric to find (JobName, JobRunId) pairs where
+       JobRunId starts with *prefix*.
     2. Per-JobName scan to collect all metric names (including per-executor
        metrics like ``glue.1.jvm.heap.usage``).
 
-    Also includes (JobName, "ALL") for each discovered JobName so that
-    aggregate-level Glue metrics are fetched alongside session-level ones.
-
     Returns
     -------
-    tuple[list[tuple[str, str]], set[str]]
-        Sorted list of (JobName, JobRunId) pairs and a set of all discovered
-        metric names (including per-executor metrics).
+    tuple[list[tuple[str, str]], set[str], dict[str, str]]
+        Sorted list of (JobName, JobRunId) pairs, a set of all discovered
+        metric names (including per-executor metrics), and a mapping of
+        JobName (UUID) → entity name derived from the real JobRunId.
     """
     sessions: set[tuple[str, str]] = set()
     job_names: set[str] = set()
+    # Maps internal JobName UUID → entity name (derived from real JobRunId)
+    job_name_to_entity: dict[str, str] = {}
     paginator = cw.get_paginator("list_metrics")
 
-    # --- Pass 1: Quick probe to find JobNames via a single known metric ---
-    logger.debug("[GlueMetrics] _discover_glue_sessions Pass 1: probing glue.ALL.jvm.heap.usage for prefix='%s'", prefix)
     import time as _time
+
+    # --- Pass 1: Find (JobName, JobRunId) pairs where JobRunId matches prefix ---
+    logger.debug("[GlueMetrics] _discover_glue_sessions Pass 1: scanning JobRunId for prefix='%s'", prefix)
     _t0 = _time.monotonic()
     page_count = 0
+    # Also match legacy session IDs like etl-dbt-session__<role>__<uuid>
+    _EXTRA_PREFIXES = ["etl-dbt-session__"]
+
     probe_iter = paginator.paginate(
         Namespace=namespace,
         MetricName="glue.ALL.jvm.heap.usage",
@@ -435,18 +465,26 @@ def _discover_glue_sessions(cw, namespace: str, prefix: str) -> tuple[list[tuple
             dims = {d["Name"]: d["Value"] for d in metric.get("Dimensions", [])}
             job_name = dims.get("JobName", "")
             job_run_id = dims.get("JobRunId", "")
-            if job_run_id and job_run_id.startswith(prefix):
+            # Match on JobRunId (the session ID), not JobName (which is a UUID)
+            matched = job_run_id and (
+                job_run_id.startswith(prefix)
+                or any(job_run_id.startswith(p) for p in _EXTRA_PREFIXES)
+            )
+            if matched:
                 sessions.add((job_name, job_run_id))
                 job_names.add(job_name)
+                # Build entity mapping from the real JobRunId (not the UUID JobName)
+                if job_name not in job_name_to_entity:
+                    job_name_to_entity[job_name] = _extract_entity_from_job_name(job_name, job_run_id)
     logger.debug("[GlueMetrics] Pass 1 done: %d pages, %d sessions, %d job_names in %.2fs",
                  page_count, len(sessions), len(job_names), _time.monotonic() - _t0)
 
     if not job_names:
-        logger.debug("[GlueMetrics] No job_names found in Pass 1 — returning empty")
+        logger.debug("[GlueMetrics] No sessions found with JobRunId prefix '%s' — returning empty", prefix)
         return [], set()
 
-    logger.info("Discovered %d JobName(s) matching prefix '%s': %s",
-                len(job_names), prefix, sorted(job_names))
+    logger.info("Discovered %d session(s) with JobRunId prefix '%s': %s",
+                len(sessions), prefix, sorted(r for _, r in sessions))
 
     # --- Pass 2: Per-JobName scan to discover all metrics (incl. per-executor) ---
     discovered_metrics: set[str] = set()
@@ -466,19 +504,19 @@ def _discover_glue_sessions(cw, namespace: str, prefix: str) -> tuple[list[tuple
                 metric_name = metric.get("MetricName", "")
                 if metric_name:
                     discovered_metrics.add(metric_name)
-                # Also pick up any session-level run IDs we missed in pass 1
-                if job_run_id and job_run_id.startswith(prefix):
+                # Pick up any additional session run IDs for this job
+                if job_run_id and (
+                    job_run_id.startswith(prefix)
+                    or any(job_run_id.startswith(p) for p in _EXTRA_PREFIXES)
+                ):
                     sessions.add((jn, job_run_id))
 
         logger.debug("[GlueMetrics] Pass 2 for '%s': %d pages, %d metrics discovered so far in %.2fs",
                      jn, p2_pages, len(discovered_metrics), _time.monotonic() - _t1)
 
-        # Add ALL-level aggregate entry for this JobName
-        sessions.add((jn, "ALL"))
-
     logger.debug("[GlueMetrics] _discover_glue_sessions DONE — %d total sessions, %d unique metrics",
                  len(sessions), len(discovered_metrics))
-    return sorted(sessions), discovered_metrics
+    return sorted(sessions), discovered_metrics, job_name_to_entity
 
 
 def _run_get_metric_data(
@@ -489,6 +527,7 @@ def _run_get_metric_data(
     end_time,
     period: int,
     stat_list: list[str],
+    job_name_to_entity: dict[str, str] | None = None,
 ) -> list[dict]:
     """Execute get_metric_data and return flat records."""
     import time as _time
@@ -525,7 +564,11 @@ def _run_get_metric_data(
             timestamps = result.get("Timestamps", [])
             values = result.get("Values", [])
 
-            entity = _extract_entity_from_run_id(job_run_id)
+            entity = _extract_entity_from_job_name(job_name, job_run_id)
+            # For synthetic ALL rows, job_run_id is "ALL" so _extract_entity_from_job_name
+            # falls back to job_name (a UUID). Use the pre-built map instead.
+            if job_run_id == "ALL" and job_name_to_entity and job_name in job_name_to_entity:
+                entity = job_name_to_entity[job_name]
 
             for ts, val in zip(timestamps, values):
                 records.append({
@@ -550,88 +593,35 @@ def _run_get_metric_data(
     logger.debug("[GlueMetrics] _run_get_metric_data Average pass done: %d records in %.2fs",
                  len(records), _time.monotonic() - _t0)
 
-    logger.debug("[GlueMetrics] Starting _backfill_stats for %d records...", len(records))
-    _tb = _time.monotonic()
-    _backfill_stats(cw, queries, query_id_map, start_time, end_time, period, records)
-    logger.debug("[GlueMetrics] _backfill_stats done in %.2fs", _time.monotonic() - _tb)
     return records
 
 
-def _backfill_stats(cw, original_queries, query_id_map, start_time, end_time, period, records):
-    """Fetch Maximum, Minimum, Sum, SampleCount stats and merge into records."""
-    import time as _time
-    if not records:
-        logger.debug("[GlueMetrics] _backfill_stats: no records, skipping")
-        return
-
-    rec_lookup = {}
-    for rec in records:
-        key = (rec["metric_name"], rec["job_run_id"], str(rec["timestamp"]))
-        rec_lookup[key] = rec
-
-    for stat_name, col_name in [("Maximum", "maximum"), ("Minimum", "minimum"),
-                                 ("Sum", "sum"), ("SampleCount", "sample_count")]:
-        logger.debug("[GlueMetrics] _backfill_stats: fetching stat=%s for %d queries", stat_name, len(original_queries))
-        _ts = _time.monotonic()
-        stat_queries = []
-        for q in original_queries:
-            sq = {
-                "Id": q["Id"],
-                "MetricStat": {
-                    **q["MetricStat"],
-                    "Stat": stat_name,
-                },
-                "ReturnData": True,
-            }
-            stat_queries.append(sq)
-
-        for batch_start in range(0, len(stat_queries), 500):
-            batch = stat_queries[batch_start:batch_start + 500]
-            next_token = None
-            page_num = 0
-            while True:
-                page_num += 1
-                kwargs = {
-                    "MetricDataQueries": batch,
-                    "StartTime": start_time,
-                    "EndTime": end_time,
-                }
-                if next_token:
-                    kwargs["NextToken"] = next_token
-
-                logger.debug("[GlueMetrics]   _backfill %s page %d...", stat_name, page_num)
-                resp = cw.get_metric_data(**kwargs)
-                for result in resp.get("MetricDataResults", []):
-                    qid = result["Id"]
-                    if qid not in query_id_map:
-                        continue
-                    metric_name, _, job_run_id = query_id_map[qid]
-                    for ts, val in zip(result.get("Timestamps", []), result.get("Values", [])):
-                        key = (metric_name, job_run_id, str(ts))
-                        if key in rec_lookup:
-                            rec_lookup[key][col_name] = val
-
-                next_token = resp.get("NextToken")
-                if not next_token:
-                    break
-        logger.debug("[GlueMetrics] _backfill_stats: stat=%s done in %.2fs", stat_name, _time.monotonic() - _ts)
 
 
-def _extract_entity_from_run_id(job_run_id: str) -> str:
-    """Extract entity name from the Glue session JobRunId.
 
-    Convention: {prefix}_{entity}_{env}_{date}
-    e.g. hk_dbt_asset_sit1_02102026 → asset
+def _extract_entity_from_job_name(job_name: str, job_run_id: str = "") -> str:
+    """Extract entity name from the Glue JobRunId (session ID).
+
+    JobRunId convention: hk_dbt_{entity}_{ddmmyyyy}
+    e.g. hk_dbt_dim_customers_18022026 → dim_customers
+         hk_dbt_stg_payments_20022026  → stg_payments
+
+    Legacy convention: etl-dbt-session__{role}__{uuid} → etl-dbt-session
+
+    Falls back to job_name if job_run_id doesn't match any known prefix.
     """
-    parts = job_run_id.split("_")
-    prefix_parts = GLUE_SESSION_ID_PREFIX.split("_")
-
-    if job_run_id.startswith(GLUE_SESSION_ID_PREFIX + "_"):
-        parts = parts[len(prefix_parts):]
-    if len(parts) > 2:
-        parts = parts[:-2]
-
-    return "_".join(parts) if parts else job_run_id
+    prefix = GLUE_SESSION_ID_PREFIX + "_"
+    source = job_run_id if job_run_id.startswith(prefix) else job_name
+    if source.startswith(prefix):
+        remainder = source[len(prefix):]
+        # Strip trailing _ddmmyyyy (8 digits) if present
+        import re
+        remainder = re.sub(r"_\d{8}$", "", remainder)
+        return remainder or source
+    # Legacy: etl-dbt-session__<role>__<uuid>
+    if job_run_id.startswith("etl-dbt-session__"):
+        return "etl-dbt-session"
+    return source
 
 
 def _enrich_glue_df(df: pd.DataFrame) -> pd.DataFrame:

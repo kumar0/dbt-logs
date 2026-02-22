@@ -1,12 +1,7 @@
 
 {{
     config(
-        materialized='incremental',
-        unique_key=['customer_sk'],
-        incremental_strategy='insert_overwrite',
-        file_format='iceberg',
-        iceberg_expire_snapshots='False',
-        partition_by=['is_current']
+        materialized='view'
     )
 }}
 

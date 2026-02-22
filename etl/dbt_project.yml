@@ -20,18 +20,16 @@ on-run-start:
 
 models:
   etl_pipeline:
+    +materialized: view
     +post-hook:
       - '{{ log_row_count() }}'
     staging:
-      +materialized: table
-      +file_format: iceberg
+      +materialized: view
       +schema: staging
     marts:
       dimensions:
-        +materialized: incremental
+        +materialized: view
         +schema: dest
-        +on_schema_change: append_new_columns
       facts:
-        +materialized: incremental
+        +materialized: view
         +schema: dest
-        +on_schema_change: append_new_columns

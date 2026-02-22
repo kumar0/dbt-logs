@@ -14,11 +14,43 @@ export interface OrchestrationStackProps extends cdk.StackProps {
   subnets: ec2.SubnetSelection;
 }
 
+/**
+ * Input schema for the state machine:
+ *
+ * Run all entities (full pipeline):
+ * {
+ *   "dbtCommand": "build",
+ *   "numWorkers": "3",
+ *   "workerType": "G.1X",
+ *   "entityName": "all",          // special value — runs without --select filter
+ *   "runDate": "18022026"         // ddmmyyyy — used in glue_session_id
+ * }
+ *
+ * Run a single entity:
+ * {
+ *   "dbtCommand": "build --select tag:customers",
+ *   "numWorkers": "3",
+ *   "workerType": "G.1X",
+ *   "entityName": "customers",    // used in glue_session_id
+ *   "runDate": "18022026"         // ddmmyyyy
+ * }
+ *
+ * The state machine computes GLUE_SESSION_ID as:  hk_dbt_{entityName}_{runDate}
+ * e.g.  hk_dbt_customers_18022026
+ */
 export class OrchestrationStack extends cdk.Stack {
   public readonly stateMachine: sfn.StateMachine;
 
   constructor(scope: Construct, id: string, props: OrchestrationStackProps) {
     super(scope, id, props);
+
+    // Build GLUE_SESSION_ID = "hk_dbt_" + entityName + "_" + runDate
+    // States SDK format: States.Format('hk_dbt_{}_{}', $.entityName, $.runDate)
+    const glueSessionIdExpr = sfn.JsonPath.format(
+      'hk_dbt_{}_{}',
+      sfn.JsonPath.stringAt('$.entityName'),
+      sfn.JsonPath.stringAt('$.runDate'),
+    );
 
     // ECS RunTask step
     const runDbtTask = new tasks.EcsRunTask(this, 'RunDbtBuild', {
@@ -45,8 +77,12 @@ export class OrchestrationStack extends cdk.Stack {
               value: sfn.JsonPath.stringAt('$.workerType'),
             },
             {
+              name: 'ENTITY_NAME',
+              value: sfn.JsonPath.stringAt('$.entityName'),
+            },
+            {
               name: 'GLUE_SESSION_ID',
-              value: sfn.JsonPath.stringAt('$.glueSessionId'),
+              value: glueSessionIdExpr,
             },
           ],
         },

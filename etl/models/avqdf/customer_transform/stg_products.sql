@@ -1,3 +1,5 @@
+{{ config(materialized='view') }}
+
 select
     product_id,
     name,

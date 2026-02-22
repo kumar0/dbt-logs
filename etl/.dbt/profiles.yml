@@ -16,6 +16,7 @@ etl_pipeline:
       idle_timeout: 10
       query_timeout_in_minutes: 60
       datalake_formats: iceberg
+      glue_session_id: "{{ env_var('GLUE_SESSION_ID', 'hk_dbt_all_' ~ modules.datetime.datetime.today().strftime('%d%m%Y')) }}"
       conf: >-
         --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
         --conf spark.sql.catalog.glue_catalog=org.apache.iceberg.spark.SparkCatalog

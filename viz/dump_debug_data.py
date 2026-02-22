@@ -31,7 +31,7 @@ def main():
     session = boto3.Session(profile_name=args.profile)
     log_group = os.environ.get(
         "DBT_LOG_GROUP",
-        "EtlComputeStack-DbtTaskDefinitionDbtContainerLogGroupE420E81B-W7fZGqD3w8jD",
+        "/ecs/ecs-dpinv-dbt",
     )
 
     end_time = datetime.now(timezone.utc)

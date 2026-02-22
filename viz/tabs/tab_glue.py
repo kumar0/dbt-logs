@@ -12,8 +12,9 @@ def render(glue_df: pd.DataFrame):
     st.markdown("### ⚡ Glue Interactive Session Metrics")
     st.caption("CloudWatch metrics from Glue sessions with `--conf enable_metrics=true`. Each entity runs in its own session.")
 
+
     if glue_df.empty:
-        st.warning("No Glue metrics data found.")
+        st.warning("No Glue metrics data found. Use the filter above or adjust the main date range and click Fetch Data.")
         return
 
     glue_entities = get_glue_entities(glue_df)
@@ -27,13 +28,11 @@ def render(glue_df: pd.DataFrame):
     with gcol2:
         entity_rows = glue_df[glue_df["entity"] == selected_entity_glue]
         if not entity_rows.empty:
-            entity_info = entity_rows.iloc[0]
-            st.markdown(f"**JobName:** `{entity_info['job_name']}`")
-            job_run_ids = glue_df[(glue_df["entity"] == selected_entity_glue) & (glue_df["job_run_id"] != "ALL")]["job_run_id"].unique()
-            if len(job_run_ids) > 0:
-                st.markdown(f"**JobRunId:** `{job_run_ids[0]}`")
+            run_count = glue_df[(glue_df["entity"] == selected_entity_glue) & (glue_df["job_run_id"] != "ALL")]["job_run_id"].nunique()
+            st.markdown(f"**Entity:** `{selected_entity_glue}`")
+            st.markdown(f"**Sessions:** `{run_count}`")
         else:
-            st.markdown("**JobName:** N/A")
+            st.markdown("**Entity:** N/A")
 
     metrics_df = glue_df[glue_df["entity"] == selected_entity_glue].copy()
 

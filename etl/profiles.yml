@@ -17,7 +17,7 @@ etl_pipeline:
       query_timeout_in_minutes: 60
       datalake_formats: iceberg
       glue_session_reuse: true
-      glue_session_id: hk_dbt
+      glue_session_id: "{{ env_var('GLUE_SESSION_ID', 'hk_dbt_all_' ~ modules.datetime.datetime.today().strftime('%d%m%Y')) }}"
       default_arguments: '--enable-auto-scaling=true,
         --enable-metrics=true,
         --enable-continuous-cloudwatch-log=true,

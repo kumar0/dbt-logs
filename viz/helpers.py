@@ -83,7 +83,16 @@ def classify_model_status(model_df, completed_invocations: set | None = None):
             if inv in completed_invocations:
                 final_status = "unknown"
             else:
-                final_status = "running"
+                # If start_time is older than 30 minutes, assume stale
+                start_ts = grp["start_time"].min()
+                if pd.notna(start_ts):
+                    # Ensure timezone-aware comparison
+                    if start_ts.tzinfo is None:
+                        start_ts = start_ts.tz_localize("UTC")
+                    age_minutes = (pd.Timestamp.now(tz="UTC") - start_ts).total_seconds() / 60
+                    final_status = "unknown" if age_minutes > 30 else "running"
+                else:
+                    final_status = "running"
         elif has_end:
             final_status = "OK"
         else:
