@@ -362,19 +362,14 @@ def _fetch_glue_from_cloudwatch(
     logger.debug("[GlueMetrics] Target metrics count: %d (predefined=%d, discovered=%d)",
                  len(target_metrics), len(predefined), len(discovered_metrics))
 
-    all_records = []
+    all_metric_queries = []
+    query_id_map = {}
 
-    for idx, (sess_job_name, sess_run_id) in enumerate(sessions):
-        logger.debug("[GlueMetrics] Processing session %d/%d: job=%s run_id=%s",
-                     idx + 1, len(sessions), sess_job_name, sess_run_id)
-        metric_queries = []
-        query_id_map = {}
-
-        for i, metric_name in enumerate(target_metrics):
-            safe_id = f"m{i}_{metric_name.replace('.', '_')}"
-            safe_id = safe_id[:255].lower()
-
-            metric_queries.append({
+    query_idx = 0
+    for sess_job_name, sess_run_id in sessions:
+        for metric_name in target_metrics:
+            safe_id = f"q_{query_idx}"
+            all_metric_queries.append({
                 "Id": safe_id,
                 "MetricStat": {
                     "Metric": {
@@ -392,21 +387,23 @@ def _fetch_glue_from_cloudwatch(
                 "ReturnData": True,
             })
             query_id_map[safe_id] = (metric_name, sess_job_name, sess_run_id)
+            query_idx += 1
 
-        total_batches = (len(metric_queries) + 499) // 500
-        for batch_start in range(0, len(metric_queries), 500):
-            batch_num = batch_start // 500 + 1
-            batch = metric_queries[batch_start:batch_start + 500]
-            logger.debug("[GlueMetrics]   Batch %d/%d (%d queries) for session %s",
-                         batch_num, total_batches, len(batch), sess_run_id)
-            _tb = _time.monotonic()
-            records = _run_get_metric_data(
-                cw, batch, query_id_map, query_start, query_end, period, stat_list,
-                job_name_to_entity=job_name_to_entity,
-            )
-            logger.debug("[GlueMetrics]   Batch %d/%d returned %d records in %.2fs",
-                         batch_num, total_batches, len(records), _time.monotonic() - _tb)
-            all_records.extend(records)
+    total_batches = (len(all_metric_queries) + 499) // 500
+    all_records = []
+    for batch_start in range(0, len(all_metric_queries), 500):
+        batch_num = batch_start // 500 + 1
+        batch = all_metric_queries[batch_start:batch_start + 500]
+        logger.debug("[GlueMetrics]   Batch %d/%d (%d queries) for all sessions",
+                     batch_num, total_batches, len(batch))
+        _tb = _time.monotonic()
+        records = _run_get_metric_data(
+            cw, batch, query_id_map, query_start, query_end, period, stat_list,
+            job_name_to_entity=job_name_to_entity,
+        )
+        logger.debug("[GlueMetrics]   Batch %d/%d returned %d records in %.2fs",
+                     batch_num, total_batches, len(records), _time.monotonic() - _tb)
+        all_records.extend(records)
 
     logger.debug("[GlueMetrics] Total records collected: %d", len(all_records))
 
@@ -486,33 +483,8 @@ def _discover_glue_sessions(cw, namespace: str, prefix: str) -> tuple[list[tuple
     logger.info("Discovered %d session(s) with JobRunId prefix '%s': %s",
                 len(sessions), prefix, sorted(r for _, r in sessions))
 
-    # --- Pass 2: Per-JobName scan to discover all metrics (incl. per-executor) ---
+    # --- Pass 2: Skip discovery of all metrics (incl. per-executor) for performance ---
     discovered_metrics: set[str] = set()
-    for jn in job_names:
-        logger.debug("[GlueMetrics] Pass 2: scanning all metrics for JobName='%s'", jn)
-        _t1 = _time.monotonic()
-        p2_pages = 0
-        jn_iter = paginator.paginate(
-            Namespace=namespace,
-            Dimensions=[{"Name": "JobName", "Value": jn}],
-        )
-        for page in jn_iter:
-            p2_pages += 1
-            for metric in page.get("Metrics", []):
-                dims = {d["Name"]: d["Value"] for d in metric.get("Dimensions", [])}
-                job_run_id = dims.get("JobRunId", "")
-                metric_name = metric.get("MetricName", "")
-                if metric_name:
-                    discovered_metrics.add(metric_name)
-                # Pick up any additional session run IDs for this job
-                if job_run_id and (
-                    job_run_id.startswith(prefix)
-                    or any(job_run_id.startswith(p) for p in _EXTRA_PREFIXES)
-                ):
-                    sessions.add((jn, job_run_id))
-
-        logger.debug("[GlueMetrics] Pass 2 for '%s': %d pages, %d metrics discovered so far in %.2fs",
-                     jn, p2_pages, len(discovered_metrics), _time.monotonic() - _t1)
 
     logger.debug("[GlueMetrics] _discover_glue_sessions DONE — %d total sessions, %d unique metrics",
                  len(sessions), len(discovered_metrics))

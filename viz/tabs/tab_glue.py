@@ -46,7 +46,6 @@ def render(glue_df: pd.DataFrame):
     _render_metric_details(summary, metrics_df)
     st.divider()
     _render_dpu_estimation(metrics_df)
-    _render_executor_skew(metrics_df)
     st.divider()
     _render_cross_entity(glue_df)
 
@@ -56,10 +55,10 @@ def _render_health_kpis(summary: pd.DataFrame):
     kpi_metrics = {
         "glue.ALL.jvm.heap.usage": ("Heap Usage", "peak", "{:.1%}"),
         "glue.ALL.system.cpuSystemLoad": ("CPU Load", "peak", "{:.1%}"),
-        "glue.ALL.s3.filesystem.read_bytes": ("S3 Read Total", "total", "bytes"),
-        "glue.ALL.s3.filesystem.write_bytes": ("S3 Write Total", "total", "bytes"),
-        "glue.driver.aggregate.numFailedTasks": ("Failed Tasks", "total", "{:.0f}"),
-        "glue.driver.aggregate.shuffleBytesWritten": ("Shuffle Written", "total", "bytes"),
+        "glue.ALL.s3.filesystem.read_bytes": ("S3 Read Total", "peak", "bytes"),
+        "glue.ALL.s3.filesystem.write_bytes": ("S3 Write Total", "peak", "bytes"),
+        "glue.driver.aggregate.numFailedTasks": ("Failed Tasks", "peak", "{:.0f}"),
+        "glue.driver.aggregate.shuffleBytesWritten": ("Shuffle Written", "peak", "bytes"),
     }
 
     kpi_cols = st.columns(len(kpi_metrics))
@@ -152,7 +151,8 @@ def _render_dpu_estimation(metrics_df: pd.DataFrame):
         return
 
     dpu_per_worker = dpu_map[detected_type]
-    total_dpu_hours = (executor_data["average"] * (5 / 60) * dpu_per_worker).sum()
+    # Add 1 to average executors to account for the mandatory driver node
+    total_dpu_hours = ((executor_data["average"] + 1) * (300 / 3600) * dpu_per_worker).sum()
     cost = total_dpu_hours * 0.44
     avg_executors = executor_data["average"].mean()
     peak_executors = executor_data["maximum"].max()
@@ -261,36 +261,6 @@ def _render_dpu_estimation(metrics_df: pd.DataFrame):
     st.plotly_chart(fig_exec, use_container_width=True)
 
 
-def _render_executor_skew(metrics_df: pd.DataFrame):
-    st.markdown("#### 🔍 Executor Skew Analysis")
-    per_exec = metrics_df[metrics_df["metric_name"].str.match(r"glue\.\d+\.")]
-    if per_exec.empty:
-        st.info("No per-executor metrics found. Only ALL-level aggregates available.")
-        return
-
-    per_exec = per_exec.copy()
-    per_exec["executor"] = per_exec["metric_name"].str.extract(r"glue\.(\d+)\.")
-    per_exec["base_metric"] = per_exec["metric_name"].str.replace(r"glue\.\d+\.", "glue.N.", regex=True)
-
-    skew_summary = per_exec.groupby(["executor", "base_metric"]).agg(
-        avg=("average", "mean"),
-        peak=("maximum", "max"),
-    ).reset_index()
-
-    for base_m in skew_summary["base_metric"].unique():
-        subset = skew_summary[skew_summary["base_metric"] == base_m]
-        if len(subset) > 1:
-            fig_skew = px.bar(
-                subset, x="executor", y="avg", color="executor",
-                title=f"Executor Comparison: {base_m}",
-                labels={"avg": "Average Value", "executor": "Executor #"},
-            )
-            fig_skew.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font_color="#e0e0e0", height=250, showlegend=False,
-            )
-            st.plotly_chart(fig_skew, use_container_width=True)
-
 
 def _render_cross_entity(glue_df: pd.DataFrame):
     st.markdown("#### 📊 Cross-Entity Comparison")
@@ -318,16 +288,29 @@ def _render_cross_entity(glue_df: pd.DataFrame):
         cross_df = glue_df[glue_df["metric_name"] == compare_metric]
 
     if not cross_df.empty:
-        entity_avg = cross_df.groupby("entity")["average"].mean().reset_index()
-        entity_avg.columns = ["Entity", "Average"]
-        entity_avg = entity_avg.sort_values("Average", ascending=False)
+        is_cumulative = compare_metric in [
+            "glue.ALL.s3.filesystem.read_bytes",
+            "glue.ALL.s3.filesystem.write_bytes",
+            "glue.driver.aggregate.shuffleBytesWritten",
+            "glue.driver.aggregate.numFailedTasks",
+            "glue.driver.aggregate.recordsRead"
+        ]
+        if is_cumulative:
+            entity_avg = cross_df.groupby("entity")["average"].max().reset_index()
+            agg_label = "Peak"
+        else:
+            entity_avg = cross_df.groupby("entity")["average"].mean().reset_index()
+            agg_label = "Average"
+            
+        entity_avg.columns = ["Entity", "Value"]
+        entity_avg = entity_avg.sort_values("Value", ascending=False)
 
         metric_label = ALL_METRICS_FLAT.get(compare_metric, {}).get("label", compare_metric)
         fig_cross = px.bar(
-            entity_avg, x="Entity", y="Average", color="Average",
+            entity_avg, x="Entity", y="Value", color="Value",
             color_continuous_scale="Viridis",
-            title=f"{metric_label} — Average per Entity",
-            labels={"Average": metric_label},
+            title=f"{metric_label} — {agg_label} per Entity",
+            labels={"Value": f"{metric_label} ({agg_label})"},
         )
         fig_cross.update_layout(
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",

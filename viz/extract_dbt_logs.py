@@ -129,6 +129,9 @@ def run_filter_log_events(
 
     client = session.client("logs")
     _q_pattern = re.compile(r'"code":\s*"(Q011|Q012|Q007|Z038)"|"event":\s*"container_start"')
+    
+    # Server-side filtering dramatically reduces data transfer and hanging on large log groups
+    filter_pattern = '?"Q011" ?"Q012" ?"Q007" ?"Z038" ?"container_start"'
 
     print(f"FilterLogEvents on {log_group}")
     print(f"  Time range: {start_time.isoformat()} → {end_time.isoformat()}")
@@ -138,6 +141,7 @@ def run_filter_log_events(
         logGroupName=log_group,
         startTime=int(start_time.timestamp() * 1000),
         endTime=int(end_time.timestamp() * 1000),
+        filterPattern=filter_pattern,
         interleaved=True,
     )
 
@@ -155,7 +159,7 @@ def run_filter_log_events(
                     {"field": "@logStream", "value": evt.get("logStreamName", "")},
                 ])
         token = resp.get("nextToken")
-        if not token:
+        if not token or token == kwargs.get("nextToken"):
             break
         kwargs["nextToken"] = token
 
