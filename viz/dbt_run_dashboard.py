@@ -21,6 +21,8 @@ if "fetch_requested" not in st.session_state:
     st.session_state.fetch_requested = False     # user must click Fetch Data
 if "run_just_completed" not in st.session_state:
     st.session_state.run_just_completed = False
+if "glue_metrics_enabled" not in st.session_state:
+    st.session_state.glue_metrics_enabled = False
 
 # --- Custom CSS ---
 st.markdown("""
@@ -175,8 +177,8 @@ if _should_fetch:
         new_dbt = pd.DataFrame()
         st.error(f"Failed to fetch dbt logs: {e}")
 
-    # Fetch Glue metrics on every full fetch (independent of dbt results)
-    if fetch_mode == "full":
+    # Fetch Glue metrics only when explicitly enabled
+    if fetch_mode == "full" and st.session_state.glue_metrics_enabled:
         try:
             new_glue = fetch_glue_job_metrics(
                 start_time=_start_iso,
@@ -346,7 +348,7 @@ with tab3:
 with tab4:
     tab_timeline.render(classified)
 with tab5:
-    tab_glue.render(glue_df_filtered)
+    tab_glue.render(glue_df_filtered, enabled=st.session_state.glue_metrics_enabled)
 
 # --- Footer ---
 st.divider()

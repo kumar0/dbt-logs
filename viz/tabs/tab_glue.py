@@ -8,10 +8,17 @@ from helpers import get_glue_entities, format_bytes, get_metric_summary_for_sess
 from data_provider import GLUE_METRIC_CATEGORIES, ALL_METRICS_FLAT, last_run_config
 
 
-def render(glue_df: pd.DataFrame):
+def render(glue_df: pd.DataFrame, enabled: bool = False):
     st.markdown("### ⚡ Glue Interactive Session Metrics")
     st.caption("CloudWatch metrics from Glue sessions with `--conf enable_metrics=true`. Each entity runs in its own session.")
 
+    if not enabled:
+        st.info("Glue metrics are disabled by default to speed up initial load.")
+        if st.button("⚡ Load Glue Metrics", type="primary"):
+            st.session_state.glue_metrics_enabled = True
+            st.session_state.fetch_requested = True
+            st.rerun()
+        return
 
     if glue_df.empty:
         st.warning("No Glue metrics data found. Use the filter above or adjust the main date range and click Fetch Data.")
