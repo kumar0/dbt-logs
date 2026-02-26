@@ -58,7 +58,7 @@ st.markdown("""
 # --- Default time window: local now - 3h to now ---
 _local_tz = datetime.now().astimezone().tzinfo   # system local timezone
 _now_local = datetime.now(_local_tz)
-_default_from_time = (_now_local - timedelta(hours=3)).time().replace(second=0, microsecond=0)
+_default_from_time = (_now_local - timedelta(minutes=15)).time().replace(second=0, microsecond=0)
 _default_to_time = _now_local.time().replace(second=0, microsecond=0)
 _default_date = _now_local.date()
 
@@ -200,9 +200,22 @@ if _should_fetch:
     else:
         # Merge delta dbt logs into existing data
         if not new_dbt.empty:
-            st.session_state.df_raw = pd.concat(
+            merged = pd.concat(
                 [st.session_state.df_raw, new_dbt]
             ).drop_duplicates().reset_index(drop=True)
+
+            # If accumulated data spans > 30 mins, reset window to last 15 mins
+            _now_utc = pd.Timestamp.now(tz="UTC")
+            if "start_time" in merged.columns:
+                _oldest = merged["start_time"].dropna().min()
+                _span_mins = (_now_utc - _oldest).total_seconds() / 60 if pd.notna(_oldest) else 0
+                if _span_mins > 30:
+                    _cutoff = _now_utc - pd.Timedelta(minutes=15)
+                    merged = merged[
+                        (merged["start_time"] >= _cutoff) | merged["start_time"].isna()
+                    ].reset_index(drop=True)
+
+            st.session_state.df_raw = merged
 
             if "record_type" in new_dbt.columns and new_dbt["record_type"].isin(
                 ["EXECUTION_DURATION", "EXECUTION_STATUS"]
