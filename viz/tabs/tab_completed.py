@@ -83,17 +83,35 @@ def _render_grouped_table(completed: pd.DataFrame):
         summary_icon = "❌" if error_count > 0 else "✅"
 
         if multi_invocation:
-            # Compute per-invocation totals, then summarise across invocations
-            inv_totals = group.groupby("invocation_id")["duration_s"].sum()
-            dur_min, dur_avg, dur_max = inv_totals.min(), inv_totals.mean(), inv_totals.max()
-            inv_count = inv_totals.nunique()
-            dur_summary = (
-                f"min {dur_min:.1f}s / avg {dur_avg:.1f}s / max {dur_max:.1f}s"
-                f" across {inv_count} runs"
-            )
+            # Wall-clock duration per invocation: last end_time minus first start_time.
+            # Summing individual view durations would overcount because dbt runs views
+            # in parallel across threads.
+            def _inv_wall_clock(inv_grp):
+                start = inv_grp["start_time"].dropna().min()
+                end = inv_grp["end_time"].dropna().max()
+                if pd.isna(start) or pd.isna(end):
+                    return float("nan")
+                return (end - start).total_seconds()
+
+            inv_totals = group.groupby("invocation_id").apply(_inv_wall_clock).dropna()
+            if inv_totals.empty:
+                dur_summary = "Duration unavailable"
+            else:
+                dur_min, dur_avg, dur_max = inv_totals.min(), inv_totals.mean(), inv_totals.max()
+                inv_count = len(inv_totals)
+                dur_summary = (
+                    f"min {dur_min:.1f}s / avg {dur_avg:.1f}s / max {dur_max:.1f}s"
+                    f" across {inv_count} runs"
+                )
         else:
-            total_dur = group["duration_s"].sum()
-            dur_summary = f"Total: {total_dur:.1f}s ({total_dur/60:.1f}m)"
+            # Single invocation: wall-clock = last end_time minus first start_time
+            start = group["start_time"].dropna().min()
+            end = group["end_time"].dropna().max()
+            if pd.notna(start) and pd.notna(end):
+                total_dur = (end - start).total_seconds()
+                dur_summary = f"Total: {total_dur:.1f}s ({total_dur/60:.1f}m)"
+            else:
+                dur_summary = "Duration unavailable"
 
         model_count = group["model_name"].nunique()
         label = (
