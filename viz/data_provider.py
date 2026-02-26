@@ -34,10 +34,10 @@ def _parse_profile_from_cli() -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Config — override via: CLI --profile > env AWS_PROFILE > default
+# Config — override via: CLI --profile > env AWS_PROFILE > default (None = use IAM role in ECS)
 # ---------------------------------------------------------------------------
 _cli_profile = _parse_profile_from_cli()
-AWS_PROFILE = _cli_profile or os.environ.get("AWS_PROFILE", "dev2")
+AWS_PROFILE = _cli_profile or os.environ.get("AWS_PROFILE") or None  # None → boto3 uses IAM role
 logger.info("[Config] AWS_PROFILE resolved to '%s' (cli=%s, env=%s)",
             AWS_PROFILE, _cli_profile, os.environ.get("AWS_PROFILE"))
 DBT_LOG_GROUP = os.environ.get("DBT_LOG_GROUP", "EtlComputeStack-DbtTaskDefinitionDbtContainerLogGroupE420E81B-W7fZGqD3w8jD")
@@ -130,7 +130,7 @@ def _fetch_from_cloudwatch(
     )
     import boto3
 
-    session = boto3.Session(profile_name=AWS_PROFILE)
+    session = boto3.Session(profile_name=AWS_PROFILE) if AWS_PROFILE else boto3.Session()
 
     # Resolve log group
     log_group = log_group_name or DBT_LOG_GROUP
@@ -320,7 +320,7 @@ def _fetch_glue_from_cloudwatch(
     logger.debug("[GlueMetrics] _fetch_glue_from_cloudwatch START — namespace=%s, mode=%s, prefix=%s",
                  namespace, fetch_mode, effective_prefix)
 
-    session = boto3.Session(profile_name=AWS_PROFILE)
+    session = boto3.Session(profile_name=AWS_PROFILE) if AWS_PROFILE else boto3.Session()
     cw = session.client("cloudwatch")
 
     # --- Resolve time window ---
