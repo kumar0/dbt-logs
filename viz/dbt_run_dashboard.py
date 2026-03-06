@@ -52,20 +52,17 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- Sidebar navigation ---
-with st.sidebar:
-    active_section = st.radio(
-        "Navigation",
-        SECTIONS,
-        index=1,  # Default: Base to Prepared
-        key="nav_section",
-    )
+# --- Global heading ---
+st.markdown("## 🔄 Data Flow Monitor")
 
-# --- Section routing ---
-SECTION_RENDERERS = {
-    "Raw to Base": render_raw_to_base,
-    "Base to Prepared": render_base_to_prepared,
-    "Notification": render_notification,
-}
+# --- Top-level section tabs ---
+tab_raw, tab_base, tab_notif = st.tabs(SECTIONS)
 
-SECTION_RENDERERS[active_section]()
+with tab_raw:
+    render_raw_to_base()
+
+with tab_base:
+    render_base_to_prepared()
+
+with tab_notif:
+    render_notification()

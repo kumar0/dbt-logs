@@ -1,17 +1,29 @@
-# Changes — Sidebar Navigation for Dashboard Sections
+# Changes — Dashboard Navigation Sections
 
-## Summary
+## Latest — Tab Navigation, Heading Fixes, Notification Tab Fix
+
+### Summary
+
+Switched from sidebar radio to top-level tabs. Added global "Data Flow Monitor" heading. Renamed section header to "DBT Monitor" (no icon, `###` size). Fixed Notification tab not rendering by replacing `st.stop()` with `return`.
+
+### Files Changed
+
+- `viz/dbt_run_dashboard.py` — Replaced sidebar nav with `st.tabs`, added global heading.
+- `viz/sections/base_to_prepared.py` — Renamed header to "DBT Monitor" (`###`), replaced `st.stop()` with `return`.
+- `viz/sections/raw_to_base.py` — Changed heading to `###` to match DBT Monitor size.
+- `viz/sections/notification.py` — Changed heading to `###` to match DBT Monitor size.
+
+---
+
+## Initial — Sidebar Navigation for Dashboard Sections
+
+### Summary
 
 Added sidebar-based navigation to the Data Flow Monitor dashboard with three sections: Raw to Base, Base to Prepared, and Notification. The existing dashboard content is now under "Base to Prepared". The other two sections are TBC placeholders.
 
-## Files Changed
+### Files Changed
 
-### Modified
-
-- `viz/dbt_run_dashboard.py` — Slimmed down to entry point only: page config, session state init, global CSS, sidebar radio navigation, and section routing. All dashboard logic moved to `viz/sections/base_to_prepared.py`.
-
-### Added
-
+- `viz/dbt_run_dashboard.py` — Slimmed down to entry point only: page config, session state init, global CSS, section routing.
 - `viz/sections/__init__.py` — Package init that re-exports all section renderers.
 - `viz/sections/base_to_prepared.py` — Full existing dashboard (header, controls, data fetching, KPIs, inner tabs, footer).
 - `viz/sections/raw_to_base.py` — TBC placeholder section.

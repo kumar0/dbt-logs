@@ -25,7 +25,7 @@ def render() -> None:
         st.session_state.effective_to_date = _default_date
 
     # --- Header ---
-    st.markdown("## 🔄 Data Flow Monitor")
+    st.markdown("### DBT Monitor")
     st.caption("Real-time monitoring dashboard for dbt view executions")
 
     # Resolve refresh interval early so widgets can use it
@@ -115,7 +115,7 @@ def render() -> None:
         if _start_iso >= _end_iso:
             st.warning("⚠️ 'From' time must be before 'To' time. Please adjust the time range.")
             st.session_state.fetch_requested = False
-            st.stop()
+            return
 
         try:
             new_dbt = fetch_dbt_run_logs(
@@ -184,7 +184,7 @@ def render() -> None:
 
     if _dbt_empty and _glue_empty:
         st.info("Set your date/time range above and click **Fetch Data** to load from CloudWatch.")
-        st.stop()
+        return
 
     # Ensure we have valid DataFrames even if one source is empty
     if _dbt_empty:
