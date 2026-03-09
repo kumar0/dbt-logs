@@ -1,7 +1,9 @@
 import streamlit as st
 
+from sections.step_functions import render as render_step_functions
+
 
 def render() -> None:
-    """Render the Raw to Base placeholder section."""
+    """Render the Raw to Base section with Step Functions monitoring."""
     st.markdown("### Raw to Base")
-    st.info("🚧 TBC — This section is under development.")
+    render_step_functions()
