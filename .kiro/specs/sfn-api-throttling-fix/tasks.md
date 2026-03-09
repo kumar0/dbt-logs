@@ -1,0 +1,113 @@
+# Implementation Plan
+
+- [x] 1. Write bug condition exploration test
+  - **Property 1: Bug Condition** — ThrottlingException Causes Data Loss Without Retry
+  - **CRITICAL**: This test MUST FAIL on unfixed code — failure confirms the bug exists
+  - **DO NOT attempt to fix the test or the code when it fails**
+  - **NOTE**: This test encodes the expected behavior — it will validate the fix when it passes after implementation
+  - **GOAL**: Surface counterexamples that demonstrate the bug exists
+  - **Scoped PBT Approach**: Scope the property to concrete failing cases — mock boto3 client to raise `ClientError` with code `ThrottlingException` on `ListExecutions` pagination and `describe_execution` calls
+  - Test file: `viz/tests/test_sfn_throttle_bug_condition.py`
+  - Use `hypothesis` with `@given` to generate random state machine ARN lists (1–5 ARNs) and time windows
+  - Mock `_sfn_client()` so that `paginator.paginate()` raises `ClientError(ThrottlingException)` on the first call, then succeeds on retry
+  - Assert: the returned DataFrame contains execution data for the throttled state machine (i.e., retry was attempted and succeeded)
+  - Assert: no `ThrottlingException` propagates unhandled
+  - Assert: DataFrame schema matches expected columns (`state_machine_arn`, `environment`, `execution_arn`, `execution_name`, `status`, `start_time`, `stop_time`, `duration_seconds`, `error_name`, `error_cause`)
+  - Also test `describe_execution` throttling: mock it to raise `ThrottlingException` once then succeed, assert error details are populated (not fallback "Error retrieving details")
+  - Run test on UNFIXED code
+  - **EXPECTED OUTCOME**: Test FAILS (this is correct — it proves the bug exists: unfixed code skips the SM or uses fallback instead of retrying)
+  - Document counterexamples found: e.g., "ThrottlingException on ListExecutions for arn:...:raw-to-base-dev2-eu-west-1 causes entire SM to be skipped with no retry"
+  - Mark task complete when test is written, run, and failure is documented
+  - _Requirements: 1.1, 1.2, 1.4, 2.1, 2.2, 2.4_
+
+- [x] 2. Write preservation property tests (BEFORE implementing fix)
+  - **Property 2: Preservation** — Non-Throttled Behavior Unchanged
+  - **IMPORTANT**: Follow observation-first methodology
+  - Test file: `viz/tests/test_sfn_preservation.py`
+  - Observe on UNFIXED code:
+    - `fetch_executions(["arn:aws:states:eu-west-1:123456789012:stateMachine:raw-to-base-dev2-eu-west-1"], start, end)` with mocked successful API responses returns DataFrame with correct schema and values
+    - `fetch_executions(arns, start, end)` with a non-throttling `ClientError` (e.g., `AccessDeniedException`) on `ListExecutions` logs and skips that SM, returns partial results
+    - `describe_execution` failing with non-throttling error sets `error_name="Error retrieving details"` and `error_cause` to exception message
+    - RUNNING executions return `NaN` for `duration_seconds` and `NaT` for `stop_time`
+    - Time window filtering correctly includes/excludes executions based on `start_time`
+  - Use `hypothesis` with `@given` to generate:
+    - Random execution statuses (`SUCCEEDED`, `FAILED`, `TIMED_OUT`, `RUNNING`, `ABORTED`)
+    - Random time windows and execution timestamps
+    - Random non-throttling error types (`AccessDeniedException`, `InvalidArn`, `StateMachineDoesNotExist`)
+  - Write property-based tests asserting:
+    - For all non-throttling inputs, DataFrame schema is always `[state_machine_arn, environment, execution_arn, execution_name, status, start_time, stop_time, duration_seconds, error_name, error_cause]`
+    - For all RUNNING executions, `duration_seconds` is NaN and `stop_time` is NaT
+    - For all non-throttling `ListExecutions` errors, the SM is skipped and remaining SMs still return data
+    - For all non-throttling `describe_execution` errors, `error_name` is `"Error retrieving details"` and `error_cause` contains the exception message
+    - Time window filtering: executions with `start_time` outside `[start_dt, end_dt]` are excluded
+  - Run tests on UNFIXED code
+  - **EXPECTED OUTCOME**: Tests PASS (this confirms baseline behavior to preserve)
+  - Mark task complete when tests are written, run, and passing on unfixed code
+  - _Requirements: 3.1, 3.2, 3.3, 3.5, 3.6_
+
+- [x] 3. Implement the SFN API throttling fix
+  - [x] 3.1 Add `_retry_on_throttle()` helper with exponential backoff and jitter
+    - Create helper function `_retry_on_throttle(func, *args, max_retries=5, base_delay=1.0, **kwargs)` in `viz/sfn_data_provider.py`
+    - Detect throttling by checking `ClientError.response['Error']['Code']` for `ThrottlingException` or `Throttling`
+    - Implement exponential backoff: `delay = base_delay * 2^attempt + random_jitter`
+    - Use `time.sleep()` for delay between retries
+    - Re-raise the original exception after max retries exhausted
+    - Non-throttling `ClientError` and other exceptions must NOT be retried — re-raise immediately
+    - _Bug_Condition: isBugCondition(input) where api_call_rate > AWS_SFN_RATE_LIMIT and no_retry_attempted()_
+    - _Expected_Behavior: retry with exponential backoff on ThrottlingException, up to max_retries_
+    - _Preservation: Non-throttling errors re-raised immediately without retry_
+    - _Requirements: 2.1, 2.2, 2.4_
+
+  - [x] 3.2 Wrap `ListExecutions` pagination with retry logic
+    - Replace direct `paginator.paginate(stateMachineArn=arn)` with a retry-aware approach
+    - Option A: Use `client.list_executions()` with manual `nextToken` handling, wrapping each call in `_retry_on_throttle`
+    - Option B: Wrap the paginator iteration so that throttled page fetches are retried
+    - Ensure the existing `except Exception as list_exc` handler still catches non-throttling errors and skips the SM
+    - After max retries exhausted on throttling, fall through to the existing skip-and-continue behavior
+    - _Bug_Condition: ListExecutions pagination raises ThrottlingException with no retry_
+    - _Expected_Behavior: Each page fetch retried with backoff on ThrottlingException_
+    - _Preservation: Non-throttling ListExecutions errors still skip SM and log warning_
+    - _Requirements: 1.1, 1.2, 2.1, 2.2, 3.2_
+
+  - [x] 3.3 Wrap `describe_execution` calls with retry logic
+    - Replace direct `client.describe_execution(executionArn=...)` with `_retry_on_throttle(client.describe_execution, executionArn=...)`
+    - Ensure the existing `except Exception as desc_exc` handler still catches non-throttling errors and sets fallback error fields
+    - After max retries exhausted on throttling, fall through to the existing fallback behavior (`error_name="Error retrieving details"`)
+    - _Bug_Condition: describe_execution raises ThrottlingException with no retry_
+    - _Expected_Behavior: describe_execution retried with backoff on ThrottlingException_
+    - _Preservation: Non-throttling describe_execution errors still set fallback error fields_
+    - _Requirements: 1.4, 2.4, 3.3_
+
+  - [x] 3.4 Add TTL-based in-memory cache for `fetch_executions()`
+    - Implement a simple cache (dict-based or `functools.lru_cache` with TTL wrapper) for `fetch_executions()`
+    - Cache key: `(tuple(state_machine_arns), start_time, end_time)`
+    - Default TTL: 60 seconds (configurable via module-level constant `CACHE_TTL_SECONDS`)
+    - Return cached DataFrame if cache entry exists and is within TTL
+    - Store result in cache after successful fetch
+    - _Bug_Condition: Dashboard auto-refresh calls fetch_executions repeatedly with same params, each making fresh API calls_
+    - _Expected_Behavior: Second call within TTL returns cached result without API calls_
+    - _Preservation: Cache miss behavior identical to original function_
+    - _Requirements: 1.3, 2.3_
+
+  - [x] 3.5 Verify bug condition exploration test now passes
+    - **Property 1: Expected Behavior** — ThrottlingException Retried Successfully
+    - **IMPORTANT**: Re-run the SAME test from task 1 — do NOT write a new test
+    - The test from task 1 encodes the expected behavior (retry on throttle, data not lost)
+    - When this test passes, it confirms the expected behavior is satisfied
+    - Run bug condition exploration test from step 1: `viz/tests/test_sfn_throttle_bug_condition.py`
+    - **EXPECTED OUTCOME**: Test PASSES (confirms bug is fixed)
+    - _Requirements: 2.1, 2.2, 2.4_
+
+  - [x] 3.6 Verify preservation tests still pass
+    - **Property 2: Preservation** — Non-Throttled Behavior Unchanged
+    - **IMPORTANT**: Re-run the SAME tests from task 2 — do NOT write new tests
+    - Run preservation property tests from step 2: `viz/tests/test_sfn_preservation.py`
+    - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions)
+    - Confirm all tests still pass after fix (no regressions)
+
+- [x] 4. Checkpoint — Ensure all tests pass
+  - Run full test suite: `pytest viz/tests/test_sfn_throttle_bug_condition.py viz/tests/test_sfn_preservation.py viz/tests/test_sfn_fetch_executions.py`
+  - Ensure all existing tests in `viz/tests/test_sfn_fetch_executions.py` still pass
+  - Ensure bug condition exploration test passes (task 1 test)
+  - Ensure preservation property tests pass (task 2 tests)
+  - Ask the user if questions arise

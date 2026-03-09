@@ -6,6 +6,8 @@ and fetches execution history via the AWS Step Functions API.
 """
 
 import re
+import time
+import random
 import logging
 from fnmatch import fnmatch
 
@@ -18,6 +20,12 @@ from data_provider import AWS_PROFILE
 logger = logging.getLogger(__name__)
 
 _ENV_RE = re.compile(r"^raw-to-base-(.+)-eu-west-1$")
+
+CACHE_TTL_SECONDS: int = 60
+"""Default time-to-live (in seconds) for the ``fetch_executions`` result cache."""
+
+_fetch_cache: dict[tuple, tuple[float, pd.DataFrame]] = {}
+"""Module-level cache mapping ``(arns_tuple, start_time, end_time)`` → ``(timestamp, DataFrame)``."""
 
 
 def _to_utc_timestamp(value) -> pd.Timestamp:
@@ -55,6 +63,54 @@ def extract_environment(name: str) -> str:
     """
     m = _ENV_RE.match(name)
     return m.group(1) if m else ""
+
+def _retry_on_throttle(func, *args, max_retries=5, base_delay=1.0, **kwargs):
+    """Call *func* and retry with exponential backoff on throttling errors.
+
+    Parameters
+    ----------
+    func:
+        Callable to invoke (e.g., ``client.describe_execution``).
+    *args:
+        Positional arguments forwarded to *func*.
+    max_retries:
+        Maximum number of retry attempts before re-raising.
+    base_delay:
+        Base delay in seconds for exponential backoff.
+    **kwargs:
+        Keyword arguments forwarded to *func*.
+
+    Returns
+    -------
+    The return value of *func*.
+
+    Raises
+    ------
+    botocore.exceptions.ClientError
+        Re-raised after *max_retries* exhausted for throttling errors,
+        or immediately for non-throttling errors.
+    Exception
+        Any non-ClientError exception is re-raised immediately.
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            return func(*args, **kwargs)
+        except botocore.exceptions.ClientError as exc:
+            error_code = exc.response["Error"]["Code"]
+            if error_code not in ("ThrottlingException", "Throttling"):
+                raise
+            if attempt >= max_retries:
+                raise
+            delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+            logger.info(
+                "Throttled (attempt %d/%d), retrying in %.1fs: %s",
+                attempt + 1,
+                max_retries,
+                delay,
+                exc,
+            )
+            time.sleep(delay)
+
 
 
 def list_matching_state_machines(
@@ -152,6 +208,14 @@ def fetch_executions(
     start_dt = _to_utc_timestamp(start_time)
     end_dt = _to_utc_timestamp(end_time)
 
+    # --- TTL cache lookup ---
+    cache_key = (tuple(state_machine_arns), start_time, end_time)
+    cached = _fetch_cache.get(cache_key)
+    if cached is not None:
+        cached_ts, cached_df = cached
+        if time.time() - cached_ts < CACHE_TTL_SECONDS:
+            return cached_df
+
     try:
         client = _sfn_client()
     except Exception as exc:
@@ -167,7 +231,10 @@ def fetch_executions(
 
         try:
             paginator = client.get_paginator("list_executions")
-            for page in paginator.paginate(stateMachineArn=arn):
+            pages = _retry_on_throttle(
+                paginator.paginate, stateMachineArn=arn
+            )
+            for page in pages:
                 for exc_info in page.get("executions", []):
                     exc_start = _to_utc_timestamp(exc_info["startDate"])
 
@@ -191,8 +258,9 @@ def fetch_executions(
                     # Fetch error details for FAILED and TIMED_OUT executions
                     if status in ("FAILED", "TIMED_OUT"):
                         try:
-                            detail = client.describe_execution(
-                                executionArn=exc_info["executionArn"]
+                            detail = _retry_on_throttle(
+                                client.describe_execution,
+                                executionArn=exc_info["executionArn"],
                             )
                             error_name = detail.get("error", "")
                             error_cause = detail.get("cause", "")
@@ -226,7 +294,10 @@ def fetch_executions(
             continue
 
     if not rows:
+        _fetch_cache[cache_key] = (time.time(), empty)
         return empty
 
-    return pd.DataFrame(rows, columns=columns)
+    result = pd.DataFrame(rows, columns=columns)
+    _fetch_cache[cache_key] = (time.time(), result)
+    return result
 
