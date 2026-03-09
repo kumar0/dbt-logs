@@ -1,11 +1,11 @@
 import streamlit as st
 
-from sections import render_base_to_prepared, render_raw_to_base, render_notification
+from sections import render_base_to_prepared, render_raw_to_base, render_notification, render_step_functions
 
 st.set_page_config(page_title="Data Flow Monitor", page_icon="🔄", layout="wide")
 
 # --- Navigation sections ---
-SECTIONS = ["Raw to Base", "Base to Prepared", "Notification"]
+SECTIONS = ["Raw to Base", "Base to Prepared", "Notification", "Step Functions"]
 
 # --- Initialise session state ---
 if "last_fetch_ts" not in st.session_state:
@@ -56,7 +56,7 @@ st.markdown("""
 st.markdown("## 🔄 Data Flow Monitor")
 
 # --- Top-level section tabs ---
-tab_raw, tab_base, tab_notif = st.tabs(SECTIONS)
+tab_raw, tab_base, tab_notif, tab_sfn = st.tabs(SECTIONS)
 
 with tab_raw:
     render_raw_to_base()
@@ -66,3 +66,6 @@ with tab_base:
 
 with tab_notif:
     render_notification()
+
+with tab_sfn:
+    render_step_functions()
