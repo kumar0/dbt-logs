@@ -6,6 +6,7 @@ import { EcrStack } from '../lib/ecr-stack';
 import { NetworkingStack } from '../lib/networking-stack';
 import { ComputeStack } from '../lib/compute-stack';
 import { OrchestrationStack } from '../lib/orchestration-stack';
+import { SfnTestHarnessStack } from '../lib/sfn-test-harness-stack';
 
 const app = new cdk.App();
 
@@ -61,5 +62,12 @@ const orchestrationStack = new OrchestrationStack(
   },
 );
 orchestrationStack.addDependency(computeStack);
+
+// SFN Test Harness — standalone test state machines for dashboard testing
+new SfnTestHarnessStack(app, 'SfnTestHarnessStack', {
+  env,
+  description: 'Step Functions test harness for dashboard testing',
+  environments: ['test', 'test2'],
+});
 
 app.synth();

@@ -1,6 +1,33 @@
 # Changes — Dashboard Navigation Sections
 
-## Latest — SFN API Throttling Fix
+## Latest — Fix trigger script region mismatch
+
+### Summary
+
+Fixed `trigger-test-executions.sh` failing to start executions due to hardcoded `eu-west-1` region in the state machine ARN. The state machines are deployed in `us-east-1` (the profile's default region). Updated the script to dynamically resolve the region and account ID upfront, and display the resolved ARN in output.
+
+### Files Changed
+
+- `iac/scripts/trigger-test-executions.sh` — Resolve region from AWS profile instead of hardcoding `eu-west-1`; pre-compute state machine ARN; show region and ARN in startup output.
+
+---
+
+## SFN Test Harness
+
+### Summary
+
+Added a Step Functions test harness for generating realistic execution data to test the monitoring dashboard. Includes a CDK stack that deploys test state machines (named `raw-to-base-{env}-eu-west-1`) with configurable random sleep, random failures, and CloudWatch logging, plus a trigger script to launch batches of randomized executions.
+
+### Files Changed
+
+- `iac/lib/sfn-test-harness-stack.ts` — New CDK stack (`SfnTestHarnessStack`) deploying test state machines with Pass, Wait, Choice, Fail, and Succeed states per environment.
+- `iac/bin/app.ts` — Added `SfnTestHarnessStack` instantiation with `['test', 'test2']` environments.
+- `iac/scripts/trigger-test-executions.sh` — New bash script to start batches of randomized test executions with configurable count, random sleep/failure/entity parameters, and error handling.
+- `.kiro/specs/sfn-test-harness/` — Spec files (requirements, design, tasks).
+
+---
+
+## SFN API Throttling Fix
 
 ### Summary
 
