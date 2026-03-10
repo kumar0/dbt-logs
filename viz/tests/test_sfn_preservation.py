@@ -125,6 +125,8 @@ def test_schema_always_has_expected_columns(mock_client_fn, env, status, hours_b
 
     **Validates: Requirements 3.1**
     """
+    import sfn_data_provider
+    sfn_data_provider._fetch_cache.clear()
     from sfn_data_provider import fetch_executions
 
     arn = _make_arn(env)
@@ -179,6 +181,8 @@ def test_running_executions_have_nan_duration_and_nat_stop(
 
     **Validates: Requirements 3.6**
     """
+    import sfn_data_provider
+    sfn_data_provider._fetch_cache.clear()
     from sfn_data_provider import fetch_executions
 
     arn = _make_arn(env)
@@ -224,6 +228,8 @@ def test_non_throttling_list_error_skips_sm_others_still_return(
 
     **Validates: Requirements 3.2**
     """
+    import sfn_data_provider
+    sfn_data_provider._fetch_cache.clear()
     from sfn_data_provider import fetch_executions
 
     arn_bad = _make_arn("uat1")
@@ -284,6 +290,8 @@ def test_non_throttling_describe_error_sets_fallback_fields(
 
     **Validates: Requirements 3.3**
     """
+    import sfn_data_provider
+    sfn_data_provider._fetch_cache.clear()
     from sfn_data_provider import fetch_executions
 
     arn = _make_arn(env)
@@ -333,6 +341,8 @@ def test_time_window_filtering_excludes_outside_executions(
 
     **Validates: Requirements 3.5**
     """
+    import sfn_data_provider
+    sfn_data_provider._fetch_cache.clear()
     from sfn_data_provider import fetch_executions
 
     arn = _make_arn(env)

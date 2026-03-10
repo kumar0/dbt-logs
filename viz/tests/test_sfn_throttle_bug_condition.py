@@ -119,6 +119,8 @@ def test_list_executions_throttle_retried_and_data_returned(
 
     **Validates: Requirements 1.1, 1.2, 2.1, 2.2**
     """
+    import sfn_data_provider
+    sfn_data_provider._fetch_cache.clear()
     from sfn_data_provider import fetch_executions
 
     arns = [_make_arn(e) for e in envs]
@@ -195,6 +197,8 @@ def test_describe_execution_throttle_retried_and_error_details_populated(
 
     **Validates: Requirements 1.4, 2.4**
     """
+    import sfn_data_provider
+    sfn_data_provider._fetch_cache.clear()
     from sfn_data_provider import fetch_executions
 
     arn = _make_arn(env)
