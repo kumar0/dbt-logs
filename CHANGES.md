@@ -1,6 +1,21 @@
 # Changes — Dashboard Navigation Sections
 
-## Latest — Step Functions Monitoring Dashboard
+## Latest — SFN API Throttling Fix
+
+### Summary
+
+Fixed AWS API rate limiting (`ThrottlingException`) in the Step Functions monitoring dashboard. Added exponential backoff with jitter retry logic for `ListExecutions` and `describe_execution` API calls, plus a 60-second TTL in-memory cache to reduce redundant API calls on dashboard auto-refresh.
+
+### Files Changed
+
+- `viz/sfn_data_provider.py` — Added `_retry_on_throttle()` helper, wrapped `ListExecutions` pagination and `describe_execution` with retry, added TTL cache for `fetch_executions()`.
+- `viz/tests/test_sfn_throttle_bug_condition.py` — Bug condition exploration tests (PBT) confirming throttle-then-retry behavior.
+- `viz/tests/test_sfn_preservation.py` — Preservation property tests (PBT) ensuring non-throttled behavior is unchanged.
+- `.kiro/specs/sfn-api-throttling-fix/` — Bugfix spec files (requirements, design, tasks).
+
+---
+
+## Step Functions Monitoring Dashboard
 
 ### Summary
 

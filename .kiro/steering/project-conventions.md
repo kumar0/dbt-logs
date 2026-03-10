@@ -25,3 +25,7 @@ inclusion: always
 - `/iac` — AWS infrastructure code (IaC).
 - `/etl` — dbt code (data transformation).
 - `/viz` — Streamlit visualization code.
+
+## Changelog
+
+- Always update `CHANGES.md` at the project root when making code changes. Add a new entry at the top (below the heading) with a summary and list of files changed. Follow the existing format in the file.
