@@ -1,9 +1,13 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as glue from 'aws-cdk-lib/aws-glue';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as logs from 'aws-cdk-lib/aws-logs';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
-import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 
 export interface OrchestrationStackProps extends cdk.StackProps {
@@ -12,6 +16,9 @@ export interface OrchestrationStackProps extends cdk.StackProps {
   containerDefinition: ecs.ContainerDefinition;
   securityGroup: ec2.ISecurityGroup;
   subnets: ec2.SubnetSelection;
+  dataLakeBucketName: string;
+  glueJobRoleArn: string;
+  vpc: ec2.IVpc;
 }
 
 /**
@@ -43,6 +50,49 @@ export class OrchestrationStack extends cdk.Stack {
 
   constructor(scope: Construct, id: string, props: OrchestrationStackProps) {
     super(scope, id, props);
+
+    // --- Glue job script deployment to S3 ---
+    const dataLakeBucket = s3.Bucket.fromBucketName(
+      this,
+      'DataLakeBucket',
+      props.dataLakeBucketName,
+    );
+
+    new s3deploy.BucketDeployment(this, 'GlueScriptDeployment', {
+      sources: [s3deploy.Source.asset('./scripts')],
+      destinationBucket: dataLakeBucket,
+      destinationKeyPrefix: 'glue-scripts',
+    });
+
+    // --- Dummy Glue job ---
+    const glueJobRole = iam.Role.fromRoleArn(
+      this,
+      'GlueJobRole',
+      props.glueJobRoleArn,
+    );
+
+    const glueJob = new glue.CfnJob(this, 'RawToBaseDummyGlueJob', {
+      name: 'raw-to-base-dummy-glue-job',
+      role: glueJobRole.roleArn,
+      command: {
+        name: 'glueetl',
+        pythonVersion: '3',
+        scriptLocation: `s3://${props.dataLakeBucketName}/glue-scripts/dummy_job.py`,
+      },
+      glueVersion: '4.0',
+      workerType: 'G.1X',
+      numberOfWorkers: 2,
+      timeout: 300,
+      defaultArguments: {
+        '--enable-metrics': 'true',
+        '--enable-continuous-cloudwatch-log': 'true',
+      },
+    });
+
+    new cdk.CfnOutput(this, 'GlueJobName', {
+      value: glueJob.name!,
+      description: 'Glue job name for raw-to-base dummy job',
+    });
 
     // Build GLUE_SESSION_ID = "hk_dbt_" + entityName + "_" + runDate
     // States SDK format: States.Format('hk_dbt_{}_{}', $.entityName, $.runDate)
@@ -101,10 +151,23 @@ export class OrchestrationStack extends cdk.Stack {
       error: 'DbtTaskError',
     });
 
-    // Wire up the state machine
-    const definition = runDbtTask
+    // Glue StartJobRun step (runs before ECS task)
+    const runGlueJob = new tasks.GlueStartJobRun(this, 'RunGlueJob', {
+      glueJobName: glueJob.name!,
+      integrationPattern: sfn.IntegrationPattern.RUN_JOB,
+      arguments: sfn.TaskInput.fromObject({
+        '--entity_name.$': '$.entityName',
+        '--run_date.$': '$.runDate',
+      }),
+      resultPath: '$.glueJobResult',
+    });
+
+    // Wire up the state machine: RunGlueJob -> RunDbtBuild -> Success
+    const definition = runGlueJob
       .addCatch(failure, { resultPath: '$.error' })
-      .next(success);
+      .next(
+        runDbtTask.addCatch(failure, { resultPath: '$.error' }).next(success),
+      );
 
     // Log group for state machine execution logs
     const logGroup = new logs.LogGroup(this, 'StateMachineLogGroup', {

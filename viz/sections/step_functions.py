@@ -1,8 +1,7 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-from streamlit_autorefresh import st_autorefresh
 from sfn_data_provider import list_matching_state_machines, fetch_executions
 import plotly.express as px
 
@@ -20,21 +19,12 @@ def status_color(status: str) -> str:
     return STATUS_COLORS.get(status, "grey")
 
 
-def render() -> None:
-    """Render the Step Functions monitoring section."""
 
-    # --- Default time window: local now - 60min to now ---
-    _local_tz = datetime.now().astimezone().tzinfo
-    _now_local = datetime.now(_local_tz)
-    _default_from_time = (_now_local - timedelta(minutes=60)).time().replace(second=0, microsecond=0)
-    _default_to_time = _now_local.time().replace(second=0, microsecond=0)
-    _default_date = _now_local.date()
+def render_step_functions(start_date, start_time, end_date, end_time, auto_refresh) -> None:
+    """Render the Step Functions monitoring section.
 
-    # Effective end time — updated by auto-refresh without touching widget state
-    if "sfn_effective_to_time" not in st.session_state:
-        st.session_state.sfn_effective_to_time = _default_to_time
-    if "sfn_effective_to_date" not in st.session_state:
-        st.session_state.sfn_effective_to_date = _default_date
+    Receives shared date/time controls from the parent Raw to Base section.
+    """
 
     # --- Session state initialisation ---
     if "sfn_state_machines" not in st.session_state:
@@ -66,67 +56,14 @@ def render() -> None:
         st.info("No state machines matching pattern `raw-to-base-*-eu-west-1` were found.")
         return
 
-    # Resolve refresh interval early so widgets can use it
+    # Resolve refresh interval
     refresh_seconds_map = {"Off": 0, "30s": 30, "1m": 60, "5m": 300}
-    _current_auto_refresh = st.session_state.get("sfn_auto_refresh", "Off")
-    refresh_interval_s = refresh_seconds_map.get(_current_auto_refresh, 0)
-
-    # --- Date Range & Controls ---
-    ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4, ctrl_col5 = st.columns([2.5, 1, 1, 1.5, 1])
-
-    with ctrl_col1:
-        date_range = st.date_input(
-            "Date Range",
-            value=(_default_date, _default_date),
-            key="sfn_date_range",
-        )
-    with ctrl_col2:
-        from_time = st.time_input(
-            "From Time",
-            value=_default_from_time,
-            key="sfn_from_time",
-        )
-    with ctrl_col3:
-        if refresh_interval_s > 0:
-            st.markdown(
-                '<div style="margin-top:4px"><label style="font-size:14px;color:#a0a0b0">To Time</label></div>',
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                f'<div style="padding:6px 0;font-size:15px">🔄 {st.session_state.sfn_effective_to_time.strftime("%H:%M")}</div>',
-                unsafe_allow_html=True,
-            )
-            to_time = st.session_state.sfn_effective_to_time
-        else:
-            to_time = st.time_input(
-                "To Time",
-                value=_default_to_time,
-                key="sfn_to_time",
-            )
-    with ctrl_col4:
-        auto_refresh = st.selectbox(
-            "Auto Refresh",
-            ["Off", "30s", "1m", "5m"],
-            index=0,
-            key="sfn_auto_refresh",
-        )
-    with ctrl_col5:
-        st.markdown('<div style="margin-top: 25px;"></div>', unsafe_allow_html=True)
-        if st.button("🔍 Fetch Data", use_container_width=True, type="primary", key="sfn_fetch_btn"):
-            st.session_state.sfn_fetch_requested = True
-            st.rerun()
-
-    # Auto-refresh (JS-based timer via sidebar to avoid layout shift)
     refresh_interval_s = refresh_seconds_map.get(auto_refresh, 0)
-    if refresh_interval_s > 0:
-        with st.sidebar:
-            st_autorefresh(interval=refresh_interval_s * 1000, key="sfn_auto_refresh_timer")
 
-    # Resolve date range (handle partial selection)
-    if isinstance(date_range, tuple) and len(date_range) == 2:
-        date_from, date_to = date_range
-    else:
-        date_from = date_to = _default_date
+    # Fetch button
+    if st.button("🔍 Fetch Data", use_container_width=True, type="primary", key="sfn_fetch_btn"):
+        st.session_state.sfn_fetch_requested = True
+        st.rerun()
 
     # --- Fetch data when requested (button or auto-refresh) ---
     _should_fetch = st.session_state.sfn_fetch_requested or (
@@ -136,16 +73,13 @@ def render() -> None:
     if _should_fetch:
         _local_tz = datetime.now().astimezone().tzinfo
         _now_local = datetime.now(_local_tz)
-        _start_local = datetime.combine(date_from, from_time).replace(tzinfo=_local_tz)
+        _start_local = datetime.combine(start_date, start_time).replace(tzinfo=_local_tz)
 
         # Update end boundary to current time on auto-refresh cycles
         if refresh_interval_s > 0 and not st.session_state.sfn_fetch_requested:
             _end_local = _now_local
-            st.session_state.sfn_effective_to_time = _now_local.time().replace(second=0, microsecond=0)
-            st.session_state.sfn_effective_to_date = _now_local.date()
-            date_to = st.session_state.sfn_effective_to_date
         else:
-            _end_local = datetime.combine(date_to, to_time).replace(tzinfo=_local_tz)
+            _end_local = datetime.combine(end_date, end_time).replace(tzinfo=_local_tz)
 
         _start_utc = _start_local.astimezone(timezone.utc)
         _end_utc = _end_local.astimezone(timezone.utc)
@@ -340,3 +274,4 @@ def render() -> None:
 
         styled = history_df.style.map(_color_status, subset=["status"])
         st.dataframe(styled, use_container_width=True, hide_index=True)
+

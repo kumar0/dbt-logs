@@ -59,8 +59,12 @@ const orchestrationStack = new OrchestrationStack(
     containerDefinition: computeStack.containerDefinition,
     securityGroup: networkingStack.ecsSecurityGroup,
     subnets: { subnetType: cdk.aws_ec2.SubnetType.PRIVATE_WITH_EGRESS },
+    dataLakeBucketName: databaseStack.dataLakeBucket.bucketName,
+    glueJobRoleArn: databaseStack.glueJobRole.roleArn,
+    vpc: networkingStack.vpc,
   },
 );
+orchestrationStack.addDependency(databaseStack);
 orchestrationStack.addDependency(computeStack);
 
 // SFN Test Harness — standalone test state machines for dashboard testing

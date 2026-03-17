@@ -19,8 +19,17 @@ export class SfnTestHarnessStack extends cdk.Stack {
 
       // Use raw ASL JSON to avoid CDK adding "End":true to the Fail state
       const aslDefinition = {
-        StartAt: `ConfigureParams${suffix}`,
+        StartAt: `SimulateGlueJob${suffix}`,
         States: {
+          [`SimulateGlueJob${suffix}`]: {
+            Type: 'Pass',
+            Result: {
+              JobRunId: 'jr_dummy_test_001',
+              JobName: 'raw-to-base-dummy-glue-job',
+            },
+            ResultPath: '$.glueJobResult',
+            Next: `ConfigureParams${suffix}`,
+          },
           [`ConfigureParams${suffix}`]: {
             Type: 'Pass',
             Result: {
