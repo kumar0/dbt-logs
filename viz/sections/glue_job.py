@@ -4,10 +4,10 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timezone
 
-from glue_job_data_provider import fetch_glue_job_runs
+from glue_job_data_provider import fetch_glue_job_runs, list_matching_glue_jobs
 import plotly.express as px
 
-GLUE_JOB_NAME = "raw-to-base-dummy-glue-job"
+GLUE_JOB_PATTERN = "raw-to-base-*-eu-west-1"
 
 GLUE_STATUS_COLORS = {
     "SUCCEEDED": "green",
@@ -75,6 +75,8 @@ def render_glue_job(start_date, start_time, end_date, end_time, auto_refresh) ->
     """
 
     # --- Session state initialisation ---
+    if "glue_discovered_jobs" not in st.session_state:
+        st.session_state.glue_discovered_jobs = None
     if "glue_job_runs" not in st.session_state:
         st.session_state.glue_job_runs = None
     if "glue_last_fetch_ts" not in st.session_state:
@@ -85,6 +87,32 @@ def render_glue_job(start_date, start_time, end_date, end_time, auto_refresh) ->
     # --- Header ---
     st.markdown("### Glue Job Monitor")
     st.caption("Monitoring dashboard for raw-to-base Glue job executions")
+
+    # --- Discover Glue jobs on first load ---
+    if st.session_state.glue_discovered_jobs is None:
+        try:
+            st.session_state.glue_discovered_jobs = list_matching_glue_jobs(GLUE_JOB_PATTERN)
+        except Exception as e:
+            st.error(f"Failed to discover Glue jobs: {e}")
+            st.session_state.glue_discovered_jobs = []
+
+    discovered_jobs = st.session_state.glue_discovered_jobs
+
+    if not discovered_jobs:
+        st.info(f"No Glue jobs matching pattern `{GLUE_JOB_PATTERN}` were found.")
+        return
+
+    # --- Job selector (supports multiple envs per account) ---
+    selected_jobs = st.multiselect(
+        "Glue Jobs",
+        options=discovered_jobs,
+        default=discovered_jobs,
+        key="glue_job_selector",
+    )
+
+    if not selected_jobs:
+        st.info("Select at least one Glue job above.")
+        return
 
     # Resolve refresh interval
     refresh_seconds_map = {"Off": 0, "30s": 30, "1m": 60, "5m": 300}
@@ -121,9 +149,17 @@ def render_glue_job(start_date, start_time, end_date, end_time, auto_refresh) ->
             return
 
         try:
-            st.session_state.glue_job_runs = fetch_glue_job_runs(
-                GLUE_JOB_NAME, _start_iso, _end_iso
-            )
+            all_runs = []
+            for job_name in selected_jobs:
+                job_runs = fetch_glue_job_runs(job_name, _start_iso, _end_iso)
+                if not job_runs.empty:
+                    job_runs = job_runs.copy()
+                    job_runs["job_name"] = job_name
+                    all_runs.append(job_runs)
+            if all_runs:
+                st.session_state.glue_job_runs = pd.concat(all_runs, ignore_index=True)
+            else:
+                st.session_state.glue_job_runs = pd.DataFrame()
             st.session_state.glue_last_fetch_ts = pd.Timestamp.now(tz="UTC").isoformat()
         except Exception as e:
             st.error(f"Failed to fetch Glue job runs: {e}")
@@ -190,9 +226,11 @@ def render_glue_job(start_date, start_time, end_date, end_time, auto_refresh) ->
             completed_df,
             x="start_time",
             y="execution_time_sec",
+            color="job_name" if "job_name" in completed_df.columns else None,
             labels={
                 "start_time": "Start Time",
                 "execution_time_sec": "Duration (seconds)",
+                "job_name": "Glue Job",
             },
             title="Run Duration Over Time",
         )
@@ -228,7 +266,7 @@ def render_glue_job(start_date, start_time, end_date, end_time, auto_refresh) ->
     st.subheader("Run History")
 
     history_df = sort_runs_by_start_time(runs_df)[
-        ["job_run_id", "status", "start_time", "completion_time", "execution_time_sec", "dpu_count"]
+        ["job_name", "job_run_id", "status", "start_time", "completion_time", "execution_time_sec", "dpu_count"]
     ]
 
     if history_df.empty:

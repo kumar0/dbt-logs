@@ -1,6 +1,19 @@
 # Changes — Dashboard Navigation Sections
 
-## Latest — BDE Performance Dashboard (Feature Complete)
+## Latest — Glue Job Dynamic Discovery + Multi-Environment Support
+
+### Summary
+
+Updated the Glue Job monitoring tab to dynamically discover Glue jobs matching `raw-to-base-*-eu-west-1` instead of using a hardcoded job name. Supports multiple environments per account — discovered jobs are shown in a multi-select, and runs from all selected jobs are aggregated. Added `list_matching_glue_jobs()` to the data provider. Run history and scatter chart now show the `job_name` column for environment visibility.
+
+### Files Changed
+
+- `viz/glue_job_data_provider.py` — Added `list_matching_glue_jobs(pattern)` for dynamic Glue job discovery
+- `viz/sections/glue_job.py` — Replaced hardcoded `GLUE_JOB_NAME` with pattern-based discovery, multi-select job picker, aggregated runs across jobs, `job_name` column in history table and scatter chart
+
+---
+
+## BDE Performance Dashboard (Feature Complete)
 
 ### Summary
 

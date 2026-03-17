@@ -105,6 +105,40 @@ def _retry_on_throttle(func, *args, max_retries=5, base_delay=1.0, **kwargs):
             time.sleep(delay)
 
 
+def list_matching_glue_jobs(pattern: str = "raw-to-base-*-eu-west-1") -> list[str]:
+    """Discover Glue job names matching a glob pattern.
+
+    Returns a list of job names, or an empty list on error.
+    """
+    from fnmatch import fnmatch
+
+    try:
+        client = _glue_client()
+    except Exception as exc:
+        logger.error("Failed to create Glue client: %s", exc)
+        return []
+
+    job_names: list[str] = []
+    try:
+        next_token: str | None = None
+        while True:
+            kwargs: dict = {"MaxResults": 200}
+            if next_token:
+                kwargs["NextToken"] = next_token
+            response = _retry_on_throttle(client.get_jobs, **kwargs)
+            for job in response.get("Jobs", []):
+                name = job.get("Name", "")
+                if fnmatch(name, pattern):
+                    job_names.append(name)
+            next_token = response.get("NextToken")
+            if not next_token:
+                break
+    except Exception as exc:
+        logger.error("Error listing Glue jobs: %s", exc)
+
+    return sorted(job_names)
+
+
 def fetch_glue_job_runs(
     job_name: str,
     start_time: str,
