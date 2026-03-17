@@ -1,6 +1,19 @@
 # Changes — Dashboard Navigation Sections
 
-## Latest — Glue Job Dynamic Discovery + Multi-Environment Support
+## Latest — Rename Glue Job to Match Discovery Pattern
+
+### Summary
+
+Renamed the dummy Glue job from `raw-to-base-dummy-glue-job` to `raw-to-base-dummy-eu-west-1` so it matches the `raw-to-base-*-eu-west-1` discovery pattern used by the dashboard.
+
+### Files Changed
+
+- `iac/lib/orchestration-stack.ts` — Updated Glue job name from `raw-to-base-dummy-glue-job` to `raw-to-base-dummy-eu-west-1`
+- `iac/lib/sfn-test-harness-stack.ts` — Updated mock Glue job name in test harness Pass state result
+
+---
+
+## Glue Job Dynamic Discovery + Multi-Environment Support
 
 ### Summary
 

@@ -72,7 +72,7 @@ export class OrchestrationStack extends cdk.Stack {
     );
 
     const glueJob = new glue.CfnJob(this, 'RawToBaseDummyGlueJob', {
-      name: 'raw-to-base-dummy-glue-job',
+      name: 'raw-to-base-dummy-eu-west-1',
       role: glueJobRole.roleArn,
       command: {
         name: 'glueetl',

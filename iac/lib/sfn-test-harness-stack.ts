@@ -25,7 +25,7 @@ export class SfnTestHarnessStack extends cdk.Stack {
             Type: 'Pass',
             Result: {
               JobRunId: 'jr_dummy_test_001',
-              JobName: 'raw-to-base-dummy-glue-job',
+              JobName: 'raw-to-base-dummy-eu-west-1',
             },
             ResultPath: '$.glueJobResult',
             Next: `ConfigureParams${suffix}`,
