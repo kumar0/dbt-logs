@@ -1,6 +1,139 @@
 # Changes — Dashboard Navigation Sections
 
-## Latest — Fix trigger script region mismatch
+## Latest — BDE Performance Dashboard (Feature Complete)
+
+### Summary
+
+Extended the "Base to Prepared" section with sub-tab navigation (mirroring Raw to Base) and per-BDE Step Functions performance analytics. The section now has two sub-tabs: "Step Functions" and "dbt Monitor". The Step Functions sub-tab discovers `base-to-prepared-*-eu-west-1` state machines, extracts BDE names from execution names (stripping `_{timestamp}_{uuid}` suffix), and provides KPI cards, error analysis, execution history, BDE summary table with success rates, horizontal bar chart of average duration per BDE, scatter chart of duration over time by BDE, drill-down into individual BDE executions, and live execution monitoring grouped by BDE. Shared date/time controls and auto-refresh sit above both sub-tabs using `b2p_` prefixed session state keys.
+
+### Files Changed
+
+- `viz/bde_parser.py` — New module: `extract_bde_name()` with regex to parse BDE names from execution names
+- `viz/sections/base_to_prepared.py` — Refactored: shared controls (`_render_shared_controls`) + sub-tabs (Step Functions, dbt Monitor) with `b2p_` session state prefix
+- `viz/sections/b2p_step_functions.py` — New module: Step Functions monitoring with BDE performance analytics, KPIs, error analysis, execution history, BDE summary/bar/scatter charts, drill-down, live monitoring
+- `viz/sections/b2p_dbt_monitor.py` — New module: extracted existing dbt monitoring logic from base_to_prepared.py into dedicated sub-tab
+- `viz/sfn_data_provider.py` — Extended: added `_B2P_ENV_RE` pattern, `extract_environment_b2p()`, updated `extract_environment()` to try both raw-to-base and base-to-prepared patterns
+
+---
+
+## Glue Job Monitoring Dashboard (Feature Complete)
+
+### Summary
+
+Added end-to-end Glue job monitoring to the Raw to Base section of the Data Flow Monitor dashboard. Created a dummy Glue job (`raw-to-base-dummy-glue-job`) in CDK, wired it into the Step Function orchestration pipeline and the test harness, built a Glue data provider, and implemented a full Glue Job monitoring tab with sub-tab navigation alongside the existing Step Functions tab.
+
+### Files Changed
+
+- `iac/scripts/dummy_job.py` — Minimal PySpark Glue job script (sleeps 10s, accepts entity_name/run_date args)
+- `iac/lib/orchestration-stack.ts` — Added Glue CfnJob, S3 script deployment, GlueStartJobRun step before ECS task with .sync pattern and Catch block
+- `iac/bin/app.ts` — Passed dataLakeBucketName, glueJobRoleArn, vpc to OrchestrationStack
+- `iac/lib/sfn-test-harness-stack.ts` — Added SimulateGlueJob Pass state to test state machines
+- `viz/glue_job_data_provider.py` — New data provider: fetch_glue_job_runs() with retry, caching, pagination
+- `viz/sections/raw_to_base.py` — Shared date/time controls + sub-tabs (Step Functions, Glue Job)
+- `viz/sections/step_functions.py` — Refactored to accept shared parameters from parent section
+- `viz/sections/glue_job.py` — New Glue Job tab: KPIs, duration metrics, error analysis, run history, cost estimation
+
+---
+
+## Implement Glue Job monitoring tab
+
+### Summary
+
+Created `viz/sections/glue_job.py` with the complete Glue Job monitoring tab including KPI cards (Total, SUCCEEDED, FAILED, TIMEOUT, RUNNING, STOPPED), duration metrics with scatter chart and summary statistics, error analysis table for FAILED/TIMEOUT runs, color-coded run history table sorted by start time descending, and cost estimation (DPU × hours × $0.44). Wired the tab into `raw_to_base.py` replacing the placeholder.
+
+### Files Changed
+
+- `viz/sections/glue_job.py` — New module with `render_glue_job()` and helper functions: `compute_status_counts`, `compute_duration_stats`, `filter_error_runs`, `sort_runs_by_start_time`, `compute_run_cost`, `compute_cost_summary`.
+- `viz/sections/raw_to_base.py` — Imported `render_glue_job`; replaced placeholder with actual Glue Job tab rendering.
+
+---
+
+## Lift shared controls into Raw to Base section with sub-tabs
+
+### Summary
+
+Refactored the Raw to Base section to render shared date/time range controls and auto-refresh selector above two sub-tabs: "Step Functions" and "Glue Job". The date/time controls were extracted from `step_functions.py` into `raw_to_base.py` so both tabs share the same time window. The Step Functions render function was renamed from `render()` to `render_step_functions()` and now accepts shared parameters (`start_date`, `start_time`, `end_date`, `end_time`, `auto_refresh`) instead of rendering its own controls. The Glue Job tab shows a placeholder for now.
+
+### Files Changed
+
+- `viz/sections/raw_to_base.py` — Added `_render_shared_controls()` helper; `render()` now creates sub-tabs and passes shared time range to each tab renderer.
+- `viz/sections/step_functions.py` — Renamed `render()` to `render_step_functions(start_date, start_time, end_date, end_time, auto_refresh)`; removed local date/time controls; removed unused imports.
+
+---
+
+## Add Glue job data provider module
+
+### Summary
+
+Created `viz/glue_job_data_provider.py` implementing `fetch_glue_job_runs()` to retrieve AWS Glue job run history. Follows the same patterns as `sfn_data_provider.py`: AWS profile resolution via `data_provider.AWS_PROFILE`, exponential backoff retry on throttling, module-level TTL cache (60s), pagination via `GetJobRuns`, time window filtering on `StartedOn`, and empty DataFrame with correct schema on errors.
+
+### Files Changed
+
+- `viz/glue_job_data_provider.py` — New module with `fetch_glue_job_runs(job_name, start_time, end_time)` returning a DataFrame with columns: `job_run_id`, `status`, `start_time`, `completion_time`, `execution_time_sec`, `dpu_count`, `error_message`.
+
+---
+
+## Add SimulateGlueJob Pass state to SfnTestHarnessStack
+
+### Summary
+
+Added a `SimulateGlueJob{Suffix}` Pass state to each test state machine in the SFN test harness. The new state is the entry point (`StartAt`) and sets mock `JobRunId` and `JobName` in `$.glueJobResult` before transitioning to `ConfigureParams{Suffix}`. This simulates a Glue job step in the test harness execution history.
+
+### Files Changed
+
+- `iac/lib/sfn-test-harness-stack.ts` — Inserted `SimulateGlueJob{Suffix}` Pass state with mock Glue job result payload; updated `StartAt` to point to the new state.
+
+---
+
+## Pass Glue job props to OrchestrationStack in CDK app entry point
+
+### Summary
+
+Updated the CDK app entry point to pass `dataLakeBucketName`, `glueJobRoleArn`, and `vpc` from existing stacks (`EtlDatabaseStack`, `EtlNetworkingStack`) to `OrchestrationStack`. Added an explicit dependency on `databaseStack` for the orchestration stack.
+
+### Files Changed
+
+- `iac/bin/app.ts` — Added `dataLakeBucketName`, `glueJobRoleArn`, and `vpc` props to `OrchestrationStack` instantiation; added `orchestrationStack.addDependency(databaseStack)`.
+
+---
+
+## Wire Glue job step into Step Function definition
+
+### Summary
+
+Added a `GlueStartJobRun` task with `.sync` integration pattern to the orchestration state machine. The Glue step runs before the existing `RunDbtBuild` ECS step, passing `entityName` and `runDate` as Glue job arguments (`--entity_name`, `--run_date`). Both the Glue step and ECS step have Catch blocks that transition to `DbtRunFailed` with error details in `$.error`. The new chain is: RunGlueJob → RunDbtBuild → DbtRunSucceeded.
+
+### Files Changed
+
+- `iac/lib/orchestration-stack.ts` — Added `GlueStartJobRun` task with `.sync` pattern; wired it before `RunDbtBuild` in the state machine chain; added Catch block transitioning to `DbtRunFailed`.
+
+---
+
+## Add Glue job and S3 script deployment to OrchestrationStack
+
+### Summary
+
+Extended `OrchestrationStack` with a dummy Glue job (`raw-to-base-dummy-glue-job`) and S3 script deployment. Added `dataLakeBucketName`, `glueJobRoleArn`, and `vpc` to the stack props. The Glue job uses worker type G.1X with 2 workers, Glue version 4.0, CloudWatch metrics enabled, and a 300s timeout. The dummy PySpark script is deployed to `s3://<dataLakeBucket>/glue-scripts/` via `BucketDeployment`. A `CfnOutput` exports the Glue job name.
+
+### Files Changed
+
+- `iac/lib/orchestration-stack.ts` — Extended `OrchestrationStackProps` with new props; added S3 `BucketDeployment` for Glue script; created `CfnJob` for `raw-to-base-dummy-glue-job`; added `CfnOutput` for Glue job name.
+
+---
+
+## Add PySpark dummy Glue job script
+
+### Summary
+
+Created a minimal PySpark dummy Glue job script for the Glue monitoring dashboard. The script accepts `--entity_name` and `--run_date` arguments, sleeps for 10 seconds to simulate work, and exits cleanly.
+
+### Files Changed
+
+- `iac/scripts/dummy_job.py` — New minimal PySpark Glue job script that initializes GlueContext, logs start/end messages, sleeps briefly, and commits.
+
+---
+
+## Fix trigger script region mismatch
 
 ### Summary
 

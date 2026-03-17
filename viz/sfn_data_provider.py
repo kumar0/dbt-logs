@@ -20,6 +20,7 @@ from data_provider import AWS_PROFILE
 logger = logging.getLogger(__name__)
 
 _ENV_RE = re.compile(r"^raw-to-base-(.+)-eu-west-1$")
+_B2P_ENV_RE = re.compile(r"^base-to-prepared-(.+)-eu-west-1$")
 
 CACHE_TTL_SECONDS: int = 60
 """Default time-to-live (in seconds) for the ``fetch_executions`` result cache."""
@@ -62,6 +63,20 @@ def extract_environment(name: str) -> str:
     Returns an empty string when the name does not match the expected pattern.
     """
     m = _ENV_RE.match(name)
+    if m:
+        return m.group(1)
+    m = _B2P_ENV_RE.match(name)
+    return m.group(1) if m else ""
+
+
+def extract_environment_b2p(name: str) -> str:
+    """Extract environment from a base-to-prepared state machine name.
+
+    Pattern: ``base-to-prepared-{environment}-eu-west-1``
+
+    Returns an empty string when the name does not match.
+    """
+    m = _B2P_ENV_RE.match(name)
     return m.group(1) if m else ""
 
 def _retry_on_throttle(func, *args, max_retries=5, base_delay=1.0, **kwargs):
