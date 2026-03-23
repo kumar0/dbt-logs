@@ -1,6 +1,20 @@
 # Changes — Dashboard Navigation Sections
 
-## Latest — Rename Glue Job to Match Discovery Pattern
+## Latest — Remove Hardcoded AWS Profiles for ECS Deployment
+
+### Summary
+
+Removed hardcoded AWS profile names (`dev2`, `mondayskills.development`) from standalone scripts so the app uses the ECS task IAM role when deployed (no profile provided). All files now default to `None` for the profile, letting boto3 fall back to the standard credential chain. Local dev still works via `--profile` CLI arg or `AWS_PROFILE` env var.
+
+### Files Changed
+
+- `viz/extract_dbt_logs.py` — Changed `DEFAULT_PROFILE` from `"dev2"` to `None`; session creation handles `None` gracefully
+- `viz/dump_debug_data.py` — Changed `--profile` default from `"dev2"` to `None`; conditional session creation
+- `viz/query_dbt_errors.py` — Replaced hardcoded `"mondayskills.development"` with env-based resolution (`AWS_PROFILE` or `None`); made `LOG_GROUP` configurable via `DBT_LOG_GROUP` env var
+
+---
+
+## Rename Glue Job to Match Discovery Pattern
 
 ### Summary
 

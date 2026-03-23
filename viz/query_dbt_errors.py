@@ -12,15 +12,17 @@ Returns a DataFrame with columns:
 """
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 
 import boto3
 import pandas as pd
 
-LOG_GROUP = "EtlComputeStack-DbtTaskDefinitionDbtContainerLogGroupE420E81B-W7fZGqD3w8jD"
-AWS_PROFILE = "mondayskills.development"
-
-# Log group is hardcoded — no need to pass it as a parameter
+LOG_GROUP = os.environ.get(
+    "DBT_LOG_GROUP",
+    "EtlComputeStack-DbtTaskDefinitionDbtContainerLogGroupE420E81B-W7fZGqD3w8jD",
+)
+AWS_PROFILE = os.environ.get("AWS_PROFILE") or None  # None → boto3 uses IAM role in ECS
 
 
 def fetch_dbt_errors(
@@ -50,7 +52,7 @@ def fetch_dbt_errors(
 
 
 def _query_cloudwatch(start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
-    session = boto3.Session(profile_name=AWS_PROFILE)
+    session = boto3.Session(profile_name=AWS_PROFILE) if AWS_PROFILE else boto3.Session()
     client = session.client("logs")
 
     filter_pattern = '"level": "error"'

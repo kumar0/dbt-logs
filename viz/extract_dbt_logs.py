@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
-DEFAULT_PROFILE = "dev2"
+DEFAULT_PROFILE = None  # None → boto3 uses IAM role in ECS
 DEFAULT_LOG_GROUP = "/ecs/ecs-dpinv-dbt"
 DEFAULT_HOURS = 24
 OUTPUT_FILE = "sample_dbt_logs.csv"
@@ -497,10 +497,10 @@ def main():
     parser.add_argument("--start", default=None, help="Start time ISO-8601")
     parser.add_argument("--end", default=None, help="End time ISO-8601")
     parser.add_argument("--output", default=OUTPUT_FILE, help=f"Output CSV (default {OUTPUT_FILE})")
-    parser.add_argument("--profile", default=DEFAULT_PROFILE, help=f"AWS profile (default {DEFAULT_PROFILE})")
+    parser.add_argument("--profile", default=DEFAULT_PROFILE, help="AWS profile (omit for ECS IAM role)")
     args = parser.parse_args()
 
-    session = boto3.Session(profile_name=args.profile)
+    session = boto3.Session(profile_name=args.profile) if args.profile else boto3.Session()
 
     log_group = args.log_group
     if not log_group:

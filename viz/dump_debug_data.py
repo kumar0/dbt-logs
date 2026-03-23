@@ -24,11 +24,11 @@ from data_provider import fetch_glue_job_metrics
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--hours", type=float, default=1)
-    parser.add_argument("--profile", default="dev2")
+    parser.add_argument("--profile", default=None, help="AWS profile (omit for ECS IAM role)")
     parser.add_argument("--skip-glue", action="store_true", help="Skip Glue metrics fetch")
     args = parser.parse_args()
 
-    session = boto3.Session(profile_name=args.profile)
+    session = boto3.Session(profile_name=args.profile) if args.profile else boto3.Session()
     log_group = os.environ.get(
         "DBT_LOG_GROUP",
         "/ecs/ecs-dpinv-dbt",
