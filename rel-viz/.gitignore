@@ -1,0 +1,9 @@
+# Generated visualisation outputs (reproducible from the source scripts)
+relationship_graph
+relationship_graph.svg
+relationship_sankey.html
+relationship_kibana.csv
+relationship_kibana.ndjson
+
+# Excel lockfiles
+~$*.xls*

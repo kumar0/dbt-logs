@@ -1,6 +1,23 @@
 # Changes — Dashboard Navigation Sections
 
-## Latest — Remove Hardcoded AWS Profiles for ECS Deployment
+## Latest — rel-viz: Relationship Visualiser + Kibana Exporter + CLAUDE.md
+
+### Summary
+
+New `rel-viz/` subproject for visualising the BDE relationship spreadsheet (Entity → Model View → Base Bde trigger → Base BDE Dependancy → Parallel lookup) and exporting it to a Kibana-friendly CSV/NDJSON. Renders both a Graphviz directed graph and a Plotly Sankey, with a Streamlit app for interactive exploration. Layout is reversed — Parallel lookup (col G) on the left, Entity (col A) on the right. Also adds a top-level `CLAUDE.md` documenting the repo layout, common commands, and the dashboard architecture for future Claude Code sessions.
+
+### Files Changed
+
+- `CLAUDE.md` — New: repo guidance for Claude Code (subproject layout, deploy/test commands, end-to-end pipeline + dashboard architecture, project conventions from `.kiro/steering/`).
+- `rel-viz/create_sample_xlsx.py` — New: generates `relationship.xlsx` mirroring the source spreadsheet (9 columns, 35 rows: Transaction / Transaction-Charge / Order entities, with merged Entity + Status cells).
+- `rel-viz/visualize_relationships.py` — New: reads the xlsx, builds 5-stage edge list (handles comma-split E and G; falls back to Trigger when E is empty), emits `relationship_graph.svg` (+ DOT source) and `relationship_sankey.html`. Reversed layout (`rankdir=RL`, explicit Sankey x-positions).
+- `rel-viz/app.py` — New: Streamlit app (sidebar upload + Entity multi-select filter; Graphviz / Sankey / Data tabs; CSV download of derived edges).
+- `rel-viz/xls_to_kibana_csv.py` — New: standalone CLI converting any `.xls`/`.xlsx` into Kibana-ready CSV or NDJSON. Forward-fills merged columns, explodes comma-separated columns, snake_cases headers, optional `@timestamp`.
+- `rel-viz/requirements.txt`, `rel-viz/README.md`, `rel-viz/.gitignore` — Project metadata and ignore rules for generated artifacts.
+
+---
+
+## Remove Hardcoded AWS Profiles for ECS Deployment
 
 ### Summary
 
