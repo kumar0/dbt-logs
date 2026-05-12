@@ -15,6 +15,7 @@ Run after extract_er.py:
 """
 
 import csv
+from collections import defaultdict
 from pathlib import Path
 
 ENTITIES_CSV = "entities.csv"
@@ -33,6 +34,11 @@ EDGE_COLOR = {
 }
 
 
+# If True: drop everything that isn't a BASE TABLE or a source.
+# Edges through dropped (view) nodes are rewired so the graph stays connected.
+TABLES_ONLY = True
+
+
 def load_entities():
     entities = {}
     with open(ENTITIES_CSV, encoding="utf-8") as f:
@@ -47,6 +53,79 @@ def load_relationships():
         for row in csv.DictReader(f):
             rels.append(row)
     return rels
+
+
+def is_kept(entity):
+    """Keep sources always; for everything else, only BASE TABLE."""
+    if entity["kind"] == "source":
+        return True
+    etype = (entity.get("type") or "").upper()
+    return etype == "BASE TABLE"
+
+
+def filter_to_tables(entities, relationships):
+    """Drop view-like entities and rewire edges around them.
+
+    If A -> V -> B and V is dropped, we produce A -> B. Repeats until no
+    edges touch a dropped node. Self-loops and duplicates are removed.
+    """
+    if not TABLES_ONLY:
+        return entities, relationships
+
+    kept = {uid: e for uid, e in entities.items() if is_kept(e)}
+    dropped = set(entities) - set(kept)
+
+    # Build adjacency just for lineage rewiring. FK edges stay as-is but
+    # are filtered to kept-only endpoints.
+    out_edges = defaultdict(list)   # parent -> [children]
+    in_edges = defaultdict(list)    # child  -> [parents]
+    fk_edges = []
+    for r in relationships:
+        if r["kind"] == "foreign_key":
+            fk_edges.append(r)
+            continue
+        out_edges[r["from"]].append(r["to"])
+        in_edges[r["to"]].append(r["from"])
+
+    def reachable_kept_descendants(start):
+        """Walk through dropped nodes until we land on kept nodes."""
+        seen, stack, result = set(), list(out_edges.get(start, [])), set()
+        while stack:
+            n = stack.pop()
+            if n in seen:
+                continue
+            seen.add(n)
+            if n in kept:
+                result.add(n)
+            else:
+                stack.extend(out_edges.get(n, []))
+        return result
+
+    new_lineage = set()
+    for parent in kept:
+        for desc in reachable_kept_descendants(parent):
+            if desc != parent:
+                new_lineage.add((parent, desc))
+
+    # Also handle the case where a dropped node is the root (e.g. a source
+    # feeding only views which then feed tables) -- the loop above already
+    # walks from each kept parent, and sources are kept, so this is covered.
+
+    relationships_out = [
+        {"kind": "lineage", "from": p, "to": c,
+         "from_column": "", "to_column": ""}
+        for (p, c) in sorted(new_lineage)
+    ]
+
+    # Keep FK edges only if both endpoints survived
+    for r in fk_edges:
+        if r["from"] in kept and r["to"] in kept:
+            relationships_out.append(r)
+
+    print(f"Filter: kept {len(kept)}/{len(entities)} entities "
+          f"(dropped {len(dropped)} views), "
+          f"{len(relationships_out)} edges after rewiring")
+    return kept, relationships_out
 
 
 def short_label(entity_row):
@@ -167,6 +246,8 @@ def main():
     entities = load_entities()
     relationships = load_relationships()
     print(f"Loaded {len(entities)} entities, {len(relationships)} relationships")
+
+    entities, relationships = filter_to_tables(entities, relationships)
 
     draw_static(entities, relationships)
     draw_interactive(entities, relationships)
