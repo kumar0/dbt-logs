@@ -1,6 +1,19 @@
 # Changes — Dashboard Navigation Sections
 
-## Latest — rel-viz: Relationship Visualiser + Kibana Exporter + CLAUDE.md
+## Latest — Sankey notebook for `sankey_table_relationships.csv`
+
+### Summary
+
+New Jupyter notebook that renders Sankey diagrams from `sankey_table_relationships.csv`. Levels are discovered dynamically via regex `^level(\d+)_table$` on the column names, so dropping any `level*_table` column from the CSV leaves the rest of the chain functional (a self-check cell demonstrates this by removing `level2_table` and re-rendering). Produces both a hand-drawn matplotlib static Sankey (no `kaleido` dependency) and a Plotly interactive Sankey for each adjacent-level pair, plus a combined multi-stage view. Outputs land in `sankey_output/` (gitignored — regenerate by running the notebook).
+
+### Files Changed
+
+- `sankey_diagrams.ipynb` — New: notebook with `detect_levels()` regex-based discovery, `adjacent_flows()` aggregation, `draw_static_sankey()` matplotlib renderer with cubic-bezier ribbons, and `build_interactive_sankey()` Plotly renderer using stage-scoped node indexing so repeated table names across levels don't collapse.
+- `.gitignore` — Added `sankey_output/` (generated PNG/HTML artifacts).
+
+---
+
+## rel-viz: Relationship Visualiser + Kibana Exporter + CLAUDE.md
 
 ### Summary
 

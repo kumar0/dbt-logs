@@ -32,3 +32,6 @@ iac/cdk.out/
 
 # Environment
 .env
+
+# Generated sankey artifacts (reproducible from sankey_diagrams.ipynb)
+sankey_output/
