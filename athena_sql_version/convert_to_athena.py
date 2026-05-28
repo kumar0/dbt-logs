@@ -137,18 +137,24 @@ def find_model_folder(project_root: Path, folder_name: str) -> list:
 
 
 def mirror_output_dir(matched: Path, output_base: Path) -> Path:
-    """Map a matched ``.../target/run/<...>/folder`` path to the output tree.
+    """Map a matched ``.../target/run/<...>/models/<...>/folder`` path to the output tree.
 
-    Preserves everything from the ``run`` segment downward, e.g.
-    ``.../target/run/etl_pipeline/models/staging`` -> ``<base>/run/etl_pipeline/models/staging``.
+    Preserves everything after the ``models`` segment, e.g.
+    ``.../target/run/dpiibc_prepared/models/avqdf/order_transform`` ->
+    ``<base>/avqdf/order_transform``. If there is no ``models`` segment, falls back to
+    everything from the ``run`` segment downward.
     """
     parts = matched.parts
-    run_idx = next(
-        i + 1
-        for i in range(len(parts) - 1)
-        if parts[i] == "target" and parts[i + 1] == "run"
-    )
-    return output_base.joinpath(*parts[run_idx:])
+    models_idxs = [i for i, p in enumerate(parts) if p == "models"]
+    if models_idxs:
+        start = models_idxs[-1] + 1
+    else:
+        start = next(
+            i + 1
+            for i in range(len(parts) - 1)
+            if parts[i] == "target" and parts[i + 1] == "run"
+        )
+    return output_base.joinpath(*parts[start:])
 
 
 def main() -> int:
