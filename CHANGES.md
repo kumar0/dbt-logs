@@ -1,6 +1,19 @@
 # Changes — Dashboard Navigation Sections
 
-## Latest — Sankey notebook for `sankey_table_relationships.csv`
+## Latest — Athena SQL converter for dbt-glue compiled models
+
+### Summary
+
+New standalone CLI `athena_sql_version/convert_to_athena.py` that turns a dbt model folder's compiled Spark/Iceberg SQL into runnable Athena SQL. Given a folder name (e.g. `order_transform`), it auto-discovers that folder under any `target/run/` directory (printing a "please run `dbt run` first" message and exiting non-zero if missing), then for each `.sql` file: strips the dbt materialization wrapper (`CREATE OR REPLACE TABLE ... AS` / `INSERT INTO ... SELECT`) down to a bare query, drops the `glue_catalog.` catalog prefix, recursively inlines any referenced sibling views (other `.sql` files in the same folder, auto-discovered — no hardcoded list) as subqueries, and transpiles the fully-assembled query once with sqlglot (`read="spark", write="athena"`). Inlining runs on the raw Spark SQL *before* transpilation so dialect handling (notably date/time functions) is applied consistently. Outputs are written as `ath_<name>.sql` into `athena_sql_version/`, mirroring the folder's path from `target/run/` downward. Transpile failures fall back to the inlined pre-transpile SQL rather than dropping the file.
+
+### Files Changed
+
+- `athena_sql_version/convert_to_athena.py` — New: `find_model_folder()` (rglob for the folder under a `target/run` path), `strip_wrapper()`/`strip_catalog()`/`load_body()` (reduce a compiled file to a bare catalog-clean query), `inline_views()` (recursive sibling-view inlining with cycle/depth guards, preserving trailing aliases, matching both `FROM` and `JOIN`), `convert_file()` (inline-then-transpile), `mirror_output_dir()`, and the `argparse` driver.
+- `athena_sql_version/requirements.txt` — New: pins `sqlglot`.
+
+---
+
+## Sankey notebook for `sankey_table_relationships.csv`
 
 ### Summary
 
